@@ -133,7 +133,6 @@
       useEffect(() => {
         const fetchGeminiKey = async () => {
           try {
-            // PENGHANCUR CACHE: Menambahkan timestamp agar browser memaksa mengambil data terbaru dari Google Script
             const nocacheUrl = `${SCRIPT_URL}?action=getConfig&t=${new Date().getTime()}`;
             const response = await fetch(nocacheUrl);
             const secureData = await response.json();
@@ -146,13 +145,11 @@
           }
         };
         
-        // Tarik key secara asinkron
         fetchGeminiKey();
 
-        // Pantau status Login Pengguna (Langsung dari Firebase Anda)
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
           setUser(currentUser);
-          setIsSystemInit(true); // Hilangkan layar loading awal
+          setIsSystemInit(true); 
         });
 
         return () => unsubscribe();
@@ -163,7 +160,6 @@
       };
 
       const saveUserToSheetAndFirestore = async (userRecord) => {
-        // 1. Simpan ke Firestore Anda
         try {
           const userDocRef = doc(db, 'users', userRecord.uid);
           await setDoc(userDocRef, {
@@ -179,7 +175,6 @@
           }
         }
 
-        // 2. Rekap ke Google Sheet
         try {
           await fetch(SCRIPT_URL, {
             method: 'POST',
@@ -217,7 +212,6 @@
         setDbWarning(null);
 
         try {
-          // VALIDASI KODE AKSES MELALUI BACKEND GS
           try {
             const nocacheUrl = `${SCRIPT_URL}?action=validateCode&code=${authForm.accessCode}&t=${new Date().getTime()}`;
             const valRes = await fetch(nocacheUrl);
@@ -229,13 +223,11 @@
               return;
             }
           } catch (gsError) {
-            // Fallback: Jika GS gagal diakses karena CORS/Jaringan, blokir proses daftar
             setAuthMessage({ type: 'error', text: 'Gagal memvalidasi kode akses (Server GS tidak merespon/URL salah).' });
             setAuthLoading(false);
             return;
           }
 
-          // Jika kode akses valid, daftarkan akun ke Firebase
           const userCredential = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
           await saveUserToSheetAndFirestore(userCredential.user);
           setAuthMessage({ type: 'success', text: 'Registrasi berhasil! Anda masuk secara otomatis.' });
@@ -291,10 +283,45 @@
         setErrorMsg(null);
       };
 
+      // FUNGSI RETRY PINTAR YANG DIPERBARUI: Kuat terhadap putus koneksi dan error tak terduga
+      const fetchWithRetry = async (url, options, retries = 5) => {
+        const delays = [1000, 2000, 4000, 8000, 16000];
+        let lastError = null;
+
+        for (let i = 0; i < retries; i++) {
+          try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+               let errorText = await response.text();
+               let errorMessage = `HTTP Error ${response.status}`;
+               try {
+                 const jsonObj = JSON.parse(errorText);
+                 if (jsonObj.error && jsonObj.error.message) {
+                    errorMessage = jsonObj.error.message;
+                 }
+               } catch(e) {}
+               const error = new Error(errorMessage);
+               error.status = response.status;
+               throw error;
+            }
+            return await response.json();
+          } catch (error) {
+            lastError = error;
+            // Jika error adalah penolakan kunci (400, 401, 403, 404), langsung hentikan (jangan ulangi)
+            if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
+               throw error;
+            }
+            if (i === retries - 1) throw error;
+            await new Promise(res => setTimeout(res, delays[i]));
+          }
+        }
+        throw lastError;
+      };
+
       const generateAnalysis = async () => {
         if (!formData.title || !formData.content) {
           setErrorMsg("Mohon isi Judul dan Narasi Konten Berita terlebih dahulu.");
-          setTimeout(() => setErrorMsg(null), 3000);
+          setTimeout(() => setErrorMsg(null), 4000);
           return;
         }
 
@@ -319,7 +346,6 @@ Struktur JSON WAJIB:
 - "kebijakan": array of string (WAJIB ADA! Berikan 3-8 poin rekomendasi kebijakan/tindak lanjut operasional oleh pemerintah atau pemangku kepentingan untuk merespon isu secara nyata. SANGAT SPESIFIK dan dapat langsung dieksekusi. Format tiap string: 'Nama Aksi/Program: Uraian detail langkah eksekusinya').
 - "strategi_komunikasi": array of string (WAJIB ADA! Berikan 3-8 poin strategi komunikasi publik atau narasi kunci oleh pemerintah untuk merespon isu. Format tiap string: 'Taktik Komunikasi: Uraian detail pesan atau eksekusinya').`;
 
-        // PAYLOAD UNTUK GEMINI 1.5
         const payload15 = {
           contents: [{ parts: [{ text: `Judul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -341,96 +367,40 @@ Struktur JSON WAJIB:
           }
         };
 
-        // PAYLOAD UNTUK GEMINI 1.0 PRO (Model Universal - Kebal Error 400 & 404)
-        const payload10 = {
-          contents: [{ parts: [{ text: `${systemPrompt}\n\n[INSTRUKSI WAJIB: OUTPUT HARUS DALAM FORMAT JSON SAJA TANPA TEKS LAIN]\n\nJudul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }]
-        };
-
         try {
           let apiKey = "";
+          let modelName = "gemini-1.5-flash"; 
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
           if (isCanvasEnv) {
-            apiKey = ""; // Sandbox Proxy Mode
+            apiKey = ""; 
+            modelName = "gemini-2.5-flash-preview-09-2025";
           } else {
-            // LINGKUNGAN VERCEL / PRODUCTION
-            const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
+            // Pembersihan kunci yang sangat ketat
+            const cleanedKey = geminiApiKey ? geminiApiKey.trim().replace(/[^A-Za-z0-9_\-]/g, "") : "";
             
-            // PENDETEKSI KESALAHAN KUNCI FIREBASE (Mencegah Error 404)
-            if (cleanedKey === myFirebaseConfig.apiKey) {
-              setErrorMsg("🚨 KESALAHAN FATAL: Anda menempelkan Kunci API Firebase ke slot Gemini! Buka aistudio.google.com, buat Kunci API Gemini yang baru, tempel di Code.gs, lalu Deploy Versi Baru.");
-              setIsAnalyzing(false);
-              return;
+            // Verifikasi langsung untuk menghindari kesalahan
+            if (!cleanedKey) {
+              throw new Error("API Key Gemini Anda kosong! Pastikan Anda sudah meletakkan API Key yang benar di Google Apps Script dan mempublikasikannya sebagai 'Versi Baru'.");
             }
-
-            if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
-              setErrorMsg("Gagal: API Key Gemini kosong. Pastikan Anda telah menempelkan kunci terbaru di Google Script, lalu 'Terapkan' (Deploy) ulang sebagai 'Versi Baru'.");
-              setIsAnalyzing(false);
-              return; 
+            if (cleanedKey === myFirebaseConfig.apiKey) {
+              throw new Error("KESALAHAN FATAL: Anda menempelkan Kunci Firebase ke tempat Kunci Gemini. Keduanya berbeda! Ambil kunci Gemini di aistudio.google.com.");
             }
             
             apiKey = cleanedKey;
           }
 
-          // DAFTAR MODEL "ULTIMATE FALLBACK"
-          const modelsToTry = isCanvasEnv 
-              ? [ { name: "gemini-2.5-flash-preview-09-2025", payload: payload15 } ] 
-              : [ 
-                  { name: "gemini-1.5-flash", payload: payload15 },
-                  { name: "gemini-1.5-flash-latest", payload: payload15 },
-                  { name: "gemini-pro", payload: payload10 } 
-                ];
-
-          let data = null;
-          let isSuccess = false;
-          let lastFetchError = null;
-
-          // SISTEM LOOP PINTAR
-          for (const modelDef of modelsToTry) {
-             try {
-                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelDef.name}:generateContent?key=${apiKey}`;
-                
-                const response = await fetch(endpointUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(modelDef.payload)
-                });
-
-                if (!response.ok) {
-                   let errorDetail = await response.text();
-                   try {
-                      const jsonObj = JSON.parse(errorDetail);
-                      if (jsonObj.error && jsonObj.error.message) {
-                         errorDetail = jsonObj.error.message;
-                      }
-                   } catch(e) {}
-                   const err = new Error(`[Status ${response.status}] - ${errorDetail}`);
-                   err.status = response.status;
-                   throw err;
-                }
-                
-                data = await response.json();
-                isSuccess = true;
-                console.log("Berhasil menggunakan model:", modelDef.name);
-                break; // Keluar dari loop pencarian jika sukses!
-             } catch (err) {
-                lastFetchError = err;
-                console.warn(`Sistem Beralih: Model [${modelDef.name}] ditolak (${err.status}). Pindah ke model selanjutnya...`);
-                
-                // Break hanya jika kuota habis (429) atau API Key tidak sah (401/403)
-                if (err.status === 401 || err.status === 403 || err.status === 429) {
-                    break;
-                }
-             }
-          }
-
-          // Jika semua model gagal
-          if (!isSuccess) {
-             throw lastFetchError;
-          }
+          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
+          
+          // Menggunakan Fungsi Retry Pintar untuk memastikan tidak ada "kegagalan bisu" akibat putus jaringan
+          const data = await fetchWithRetry(endpointUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload15)
+          });
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!textResponse) throw new Error("Respons AI kosong");
+          if (!textResponse) throw new Error("Google AI merespons, namun datanya kosong.");
           
           let parsedData;
           try {
@@ -439,7 +409,7 @@ Struktur JSON WAJIB:
             parsedData = JSON.parse(cleanJson);
           } catch (parseErr) {
             console.error("JSON Parsing failed:", textResponse);
-            throw new Error("Format respons AI tidak dikenali.");
+            throw new Error("Format data dari AI rusak dan tidak bisa dibaca sistem.");
           }
           
           const kebijakanArr = parsedData.kebijakan || parsedData.rekomendasi_kebijakan || parsedData.rekomendasi || [];
@@ -466,24 +436,28 @@ Struktur JSON WAJIB:
 
         } catch (error) {
           console.error("ANALYSIS ERROR:", error);
-          const errMsg = error.message || "Terjadi kesalahan yang tidak diketahui.";
           
-          // DETEKSI PENYAKIT GOOGLE APPS SCRIPT CACHE
-          const partialKey = apiKey ? apiKey.substring(0, 10) : "Kosong";
+          let friendlyErrorMsg = error.message || "Terjadi masalah jaringan atau koneksi terputus.";
           
-          if (error.message.includes("Status 404")) {
-             setErrorMsg(`Error 404: Kunci API yang sedang ditarik Vercel berawalan "${partialKey}...". Cek di Google Cloud, apakah kunci aslinya sama? Jika BEDA, Anda LUPA melakukan Deploy -> "Versi Baru" di Apps Script!`);
+          // Menerjemahkan Error Kode Status menjadi Kalimat Mudah Dipahami
+          if (error.status === 404) {
+             friendlyErrorMsg = "Model AI tidak ditemukan (404). Kemungkinan Kunci API Anda tidak valid atau tidak memiliki akses ke Gemini 1.5.";
+          } else if (error.status === 400) {
+             friendlyErrorMsg = `Data ditolak oleh server (400). Detail: ${error.message}`;
           } else if (error.status === 401 || error.status === 403) {
-            setErrorMsg(`Akses Ditolak (${error.status}): Kunci API tidak valid. Kunci yang dibaca Vercel: "${partialKey}...". Lakukan Deploy Versi Baru di GS!`);
+             friendlyErrorMsg = "Akses Ditolak (401/403). Kunci API Anda salah, kedaluwarsa, atau tidak terhubung dengan benar.";
           } else if (error.status === 429) {
-            setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
-          } else {
-            setErrorMsg(`GAGAL: ${errMsg}`);
+             friendlyErrorMsg = "Sistem Google sedang terlalu sibuk (429). Mohon tunggu sekitar 30 detik lalu coba lagi.";
+          } else if (error.message === "Failed to fetch") {
+             friendlyErrorMsg = "Gagal terhubung ke internet. Pastikan tidak ada AdBlocker/Antivirus yang memblokir akses ke server Google.";
           }
+
+          setErrorMsg(`GAGAL: ${friendlyErrorMsg}`);
           
-          setTimeout(() => setErrorMsg(null), 30000); // Tampil 30 detik
+          // Pesan error bertahan selama 20 detik agar sempat dibaca
+          setTimeout(() => setErrorMsg(null), 20000); 
         } finally {
-          setIsAnalyzing(false);
+          setIsAnalyzing(false); // Mengembalikan tombol dari status 'Menganalisis...' ke 'Analytics'
         }
       };
 
