@@ -287,19 +287,27 @@
         setErrorMsg(null);
       };
 
-      // FUNGSI RETRY PINTAR: Langsung gagal (fail fast) jika kode status adalah 400, 401, 403, 404
+      // FUNGSI RETRY PINTAR DENGAN PELACAK ERROR ASLI DARI GOOGLE
       const fetchWithRetry = async (url, options, retries = 3) => {
         const delays = [1000, 2000, 4000];
         for (let i = 0; i < retries; i++) {
           try {
             const response = await fetch(url, options);
             if (!response.ok) {
-               const errText = await response.text();
-               console.error(`Google API Error (${response.status}):`, errText);
-               const error = new Error(`HTTP error! status: ${response.status}`);
+               let errorDetail = "";
+               try {
+                 // Mencoba membaca detail pesan error dari JSON Google
+                 const errObj = await response.json();
+                 errorDetail = errObj.error ? errObj.error.message : JSON.stringify(errObj);
+               } catch (e) {
+                 // Fallback jika Google merespon dengan format Text murni
+                 errorDetail = await response.text();
+               }
+               
+               const error = new Error(errorDetail || `HTTP error! status: ${response.status}`);
                error.status = response.status;
                
-               // Jika error berkaitan dengan akses atau model yang tidak ditemukan, Dilarang di-retry.
+               // Jika error berkaitan dengan akses/not found, jangan buang waktu me-retry.
                if (response.status >= 400 && response.status < 500 && response.status !== 429) {
                    throw error;
                }
@@ -381,10 +389,10 @@ Struktur JSON WAJIB:
           // DETEKSI LINGKUNGAN YANG KETAT
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
-          // DAFTAR MODEL FALLBACK OTOMATIS: Jika model pertama 404, pindah ke model berikutnya
+          // DAFTAR MODEL FALLBACK OTOMATIS: Disederhanakan untuk menghindari konflik
           const modelsToTry = isCanvasEnv 
               ? ["gemini-2.5-flash-preview-09-2025"] 
-              : ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro", "gemini-1.5-flash-latest"];
+              : ["gemini-1.5-flash", "gemini-1.5-pro"];
 
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
@@ -408,7 +416,10 @@ Struktur JSON WAJIB:
           // SISTEM LOOP AUTO-FALLBACK
           for (const model of modelsToTry) {
              try {
-                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                const cleanModel = model.trim();
+                // Menggunakan endpoint API versi v1 (Stabil) bukan lagi v1beta
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${apiKey}`;
+                
                 data = await fetchWithRetry(endpointUrl, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -420,8 +431,8 @@ Struktur JSON WAJIB:
              } catch (err) {
                 lastFetchError = err;
                 console.warn(`Sistem Beralih: Model [${model}] gagal merespon (${err.status}). Mencoba rute model lain...`);
-                // Hentikan pencarian seketika jika ternyata kunci API-nya yang salah
-                if (err.status === 401 || err.status === 403) {
+                // Hentikan pencarian seketika jika ternyata kunci API-nya yang salah (400 atau 403)
+                if (err.status === 400 || err.status === 401 || err.status === 403) {
                     break;
                 }
              }
@@ -468,17 +479,24 @@ Struktur JSON WAJIB:
           });
 
         } catch (error) {
-          console.error(error);
-          if (error.status === 401 || error.status === 403 || (error.message && error.message.includes("401"))) {
-            setErrorMsg("Akses ditolak (Error 401/403). Mohon periksa kembali API Key Anda di Google Script, pastikan tidak ada karakter tersembunyi.");
-          } else if (error.status === 404 || (error.message && error.message.includes("404"))) {
-            setErrorMsg("Gagal menghubungi AI secara keseluruhan (Error 404). Pastikan proyek API Google Cloud Anda sudah aktif.");
-          } else if (error.status === 429 || (error.message && error.message.includes("429"))) {
+          console.error("ANALYSIS ERROR:", error);
+          const errMsg = error.message || "Terjadi kesalahan yang tidak diketahui.";
+          
+          // PENAMPILAN ERROR DETAIL DARI GOOGLE
+          if (error.status === 401 || error.status === 403) {
+            setErrorMsg(`Akses Ditolak (${error.status}): API Key mungkin salah atau tidak valid. Respon Google: ${errMsg.substring(0, 100)}`);
+          } else if (error.status === 404) {
+            setErrorMsg(`Model Tidak Ditemukan (${error.status}): Respon Google: ${errMsg.substring(0, 120)}`);
+          } else if (error.status === 400) {
+            setErrorMsg(`Format Salah (${error.status}): Mungkin masalah pada API Key atau Payload. Respon Google: ${errMsg.substring(0, 120)}`);
+          } else if (error.status === 429) {
             setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
           } else {
-            setErrorMsg("Gagal memproses analisis AI. Pastikan teks tidak mengandung karakter aneh dan coba lagi.");
+            setErrorMsg(`Gagal (${error.status || 'Network'}): ${errMsg.substring(0, 120)}`);
           }
-          setTimeout(() => setErrorMsg(null), 6000);
+          
+          // Memperlama waktu tampil error agar mudah dibaca pengguna
+          setTimeout(() => setErrorMsg(null), 15000); 
         } finally {
           setIsAnalyzing(false);
         }
