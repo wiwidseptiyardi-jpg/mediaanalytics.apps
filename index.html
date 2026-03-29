@@ -106,8 +106,11 @@
       const [isSystemInit, setIsSystemInit] = useState(false);
       const [dbWarning, setDbWarning] = useState(null);
 
-      // Link Backend Google Apps Script Anda (Untuk Kunci Gemini & Validasi Daftar)
+      // =========================================================================
+      // [PENTING] GANTI URL INI DENGAN LINK GOOGLE APPS SCRIPT ANDA SENDIRI!
+      // =========================================================================
       const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxxpvPkfPM88Xs5J2cJL6r112PKrahH6f0eTUJrc8ArJrjfzyY7sqdjnK-Zbm0vGvdF0A/exec";
+      // =========================================================================
 
       // State untuk Input Data
       const [formData, setFormData] = useState({
@@ -125,10 +128,9 @@
       const [errorMsg, setErrorMsg] = useState(null);
 
       // =========================================================================
-      // MEMUAT STATUS PENGGUNA & KUNCI RAHASIA GEMINI
+      // MEMUAT STATUS PENGGUNA & KUNCI RAHASIA GEMINI DARI BACKEND
       // =========================================================================
       useEffect(() => {
-        // 1. Tarik API Key Gemini dari Server GS secara rahasia
         const fetchGeminiKey = async () => {
           try {
             const response = await fetch(`${SCRIPT_URL}?action=getConfig`);
@@ -140,9 +142,11 @@
             console.error("Gagal menarik kunci Gemini dari backend GS:", error);
           }
         };
+        
+        // Tarik key secara asinkron
         fetchGeminiKey();
 
-        // 2. Pantau status Login Pengguna (Langsung dari Firebase Anda)
+        // Pantau status Login Pengguna (Langsung dari Firebase Anda)
         const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
           setUser(currentUser);
           setIsSystemInit(true); // Hilangkan layar loading awal
@@ -222,7 +226,7 @@
             }
           } catch (gsError) {
             // Fallback: Jika GS gagal diakses karena CORS/Jaringan, blokir proses daftar
-            setAuthMessage({ type: 'error', text: 'Gagal memvalidasi kode akses (Server GS tidak merespon).' });
+            setAuthMessage({ type: 'error', text: 'Gagal memvalidasi kode akses (Server GS tidak merespon/URL salah).' });
             setAuthLoading(false);
             return;
           }
@@ -360,9 +364,22 @@ Struktur JSON WAJIB:
 
         try {
           let apiKey = "";
-          let url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+          let url = "";
 
-          if (typeof __app_id === 'undefined' && geminiApiKey && geminiApiKey.startsWith("AIza")) {
+          // DETEKSI LINGKUNGAN YANG KETAT
+          const isCanvasEnv = typeof __app_id !== 'undefined';
+
+          if (isCanvasEnv) {
+            // Lingkungan Uji Coba Canvas (Aman menggunakan API kosong/Proxy)
+            apiKey = "";
+            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+          } else {
+            // LINGKUNGAN VERCEL / PRODUCTION
+            if (!geminiApiKey || !geminiApiKey.startsWith("AIza")) {
+              setErrorMsg("Gagal: API Key Gemini belum terhubung. Pastikan Anda telah mengganti variabel SCRIPT_URL dengan link Apps Script milik Anda sendiri.");
+              setIsAnalyzing(false);
+              return; // Menghentikan proses agar tidak error 400
+            }
             apiKey = geminiApiKey;
             url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
           }
@@ -411,7 +428,7 @@ Struktur JSON WAJIB:
         } catch (error) {
           console.error(error);
           if (error.status === 401 || error.status === 403 || (error.message && error.message.includes("401"))) {
-            setErrorMsg("Akses ditolak (Error 401). Mohon periksa kembali integrasi API Key di Google Sheet Anda.");
+            setErrorMsg("Akses ditolak (Error 401). Mohon periksa kembali integrasi API Key di Google Script Anda.");
           } else if (error.status === 404 || (error.message && error.message.includes("404"))) {
             setErrorMsg("Gagal menghubungi AI (Error 404). Sistem memastikan model terhubung. Coba lagi.");
           } else if (error.status === 429 || (error.message && error.message.includes("429"))) {
