@@ -133,6 +133,7 @@
       useEffect(() => {
         const fetchGeminiKey = async () => {
           try {
+            // PENGHANCUR CACHE: Memaksa Vercel menarik kunci terbaru dari Google
             const nocacheUrl = `${SCRIPT_URL}?action=getConfig&t=${new Date().getTime()}`;
             const response = await fetch(nocacheUrl);
             const secureData = await response.json();
@@ -283,9 +284,9 @@
         setErrorMsg(null);
       };
 
-      // FUNGSI RETRY PINTAR YANG DIPERBARUI: Kuat terhadap putus koneksi dan error tak terduga
-      const fetchWithRetry = async (url, options, retries = 5) => {
-        const delays = [1000, 2000, 4000, 8000, 16000];
+      // Fungsi Pembantu untuk Penarikan Data Data
+      const fetchWithRetry = async (url, options, retries = 3) => {
+        const delays = [1000, 2000, 4000];
         let lastError = null;
 
         for (let i = 0; i < retries; i++) {
@@ -296,9 +297,7 @@
                let errorMessage = `HTTP Error ${response.status}`;
                try {
                  const jsonObj = JSON.parse(errorText);
-                 if (jsonObj.error && jsonObj.error.message) {
-                    errorMessage = jsonObj.error.message;
-                 }
+                 if (jsonObj.error && jsonObj.error.message) errorMessage = jsonObj.error.message;
                } catch(e) {}
                const error = new Error(errorMessage);
                error.status = response.status;
@@ -307,9 +306,8 @@
             return await response.json();
           } catch (error) {
             lastError = error;
-            // Jika error adalah penolakan kunci (400, 401, 403, 404), langsung hentikan (jangan ulangi)
             if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) {
-               throw error;
+               throw error; // Jangan retry jika itu error 4xx pasti
             }
             if (i === retries - 1) throw error;
             await new Promise(res => setTimeout(res, delays[i]));
@@ -334,52 +332,49 @@
         setIsAnalyzing(true);
         setErrorMsg(null);
 
-        const systemPrompt = `Anda adalah Analis Kebijakan Publik dan Pakar Hubungan Masyarakat Senior di pemerintahan.
-Tugas Anda adalah membedah teks berita/laporan yang diberikan secara tajam dan mendalam menggunakan kerangka Analisis SWOT, dan menghasilkan output JSON murni (tanpa markdown).
-PENTING: Gunakan nama key JSON persis seperti format di bawah ini! Jangan menuliskan penomoran (seperti 1., 2., 3.) di dalam string karena sistem sudah menomorinya otomatis.
-Struktur JSON WAJIB:
-- "resume": string (Ringkasan eksekutif berita memuat intisari 5W+1H).
-- "swot_kekuatan": array of string (Strengths: poin kekuatan instansi terkait isu ini. Format tiap string: 'Judul Poin: Uraian detail').
-- "swot_kelemahan": array of string (Weaknesses: poin kelemahan instansi. Format tiap string: 'Judul Poin: Uraian detail').
-- "swot_peluang": array of string (Opportunities: poin peluang eksternal. Format tiap string: 'Judul Poin: Uraian detail').
-- "swot_ancaman": array of string (Threats: poin ancaman/risiko eskalasi. Format tiap string: 'Judul Poin: Uraian detail').
-- "kebijakan": array of string (WAJIB ADA! Berikan 3-8 poin rekomendasi kebijakan/tindak lanjut operasional oleh pemerintah atau pemangku kepentingan untuk merespon isu secara nyata. SANGAT SPESIFIK dan dapat langsung dieksekusi. Format tiap string: 'Nama Aksi/Program: Uraian detail langkah eksekusinya').
-- "strategi_komunikasi": array of string (WAJIB ADA! Berikan 3-8 poin strategi komunikasi publik atau narasi kunci oleh pemerintah untuk merespon isu. Format tiap string: 'Taktik Komunikasi: Uraian detail pesan atau eksekusinya').`;
+        // PROMPT SANGAT KUAT: Memaksa JSON murni tanpa skema API
+        const systemPrompt = `Anda adalah Analis Kebijakan Publik dan Pakar Hubungan Masyarakat Senior.
+Tugas Anda adalah membedah teks berita yang diberikan menggunakan Analisis SWOT.
 
-        const payload15 = {
-          contents: [{ parts: [{ text: `Judul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }],
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: "OBJECT",
-              properties: {
-                resume: { type: "STRING" },
-                swot_kekuatan: { type: "ARRAY", items: { type: "STRING" } },
-                swot_kelemahan: { type: "ARRAY", items: { type: "STRING" } },
-                swot_peluang: { type: "ARRAY", items: { type: "STRING" } },
-                swot_ancaman: { type: "ARRAY", items: { type: "STRING" } },
-                kebijakan: { type: "ARRAY", items: { type: "STRING" } },
-                strategi_komunikasi: { type: "ARRAY", items: { type: "STRING" } }
-              },
-              required: ["resume", "swot_kekuatan", "swot_kelemahan", "swot_peluang", "swot_ancaman", "kebijakan", "strategi_komunikasi"]
-            }
-          }
-        };
+PENTING: Output Anda HARUS berupa format JSON murni TANPA blok markdown (tanpa awalan \`\`\`json). 
+Gunakan nama key JSON persis seperti di bawah ini:
+
+{
+  "resume": "Ringkasan intisari 5W+1H.",
+  "swot_kekuatan": ["Kekuatan: uraian", "Kekuatan: uraian"],
+  "swot_kelemahan": ["Kelemahan: uraian"],
+  "swot_peluang": ["Peluang: uraian"],
+  "swot_ancaman": ["Ancaman: uraian"],
+  "kebijakan": ["Rekomendasi 1: uraian", "Rekomendasi 2: uraian"],
+  "strategi_komunikasi": ["Taktik 1: uraian", "Taktik 2: uraian"]
+}`;
 
         try {
           let apiKey = "";
-          let modelName = "gemini-1.5-flash"; 
+          let finalTargetModel = "gemini-1.5-flash"; // Default
           const isCanvasEnv = typeof __app_id !== 'undefined';
+          let data = null;
 
           if (isCanvasEnv) {
+            // MODE UJI COBA CANVAS (Abaikan jika di Vercel)
             apiKey = ""; 
-            modelName = "gemini-2.5-flash-preview-09-2025";
+            finalTargetModel = "gemini-2.5-flash-preview-09-2025";
+            
+            const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${finalTargetModel}:generateContent?key=${apiKey}`;
+            data = await fetchWithRetry(endpointUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA BERITA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }]
+                })
+            });
+
           } else {
-            // Pembersihan kunci yang sangat ketat
+            // ======================================================================
+            // MODE PRODUKSI VERCEL (PEMINDAI MODEL OTOMATIS)
+            // ======================================================================
             const cleanedKey = geminiApiKey ? geminiApiKey.trim().replace(/[^A-Za-z0-9_\-]/g, "") : "";
             
-            // Verifikasi langsung untuk menghindari kesalahan
             if (!cleanedKey) {
               throw new Error("API Key Gemini Anda kosong! Pastikan Anda sudah meletakkan API Key yang benar di Google Apps Script dan mempublikasikannya sebagai 'Versi Baru'.");
             }
@@ -388,28 +383,69 @@ Struktur JSON WAJIB:
             }
             
             apiKey = cleanedKey;
-          }
 
-          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-          
-          // Menggunakan Fungsi Retry Pintar untuk memastikan tidak ada "kegagalan bisu" akibat putus jaringan
-          const data = await fetchWithRetry(endpointUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload15)
-          });
+            // 1. TANYA GOOGLE: MODEL APA SAJA YANG SAYA PUNYA? (MENCEGAH ERROR 404)
+            try {
+                const modelsRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+                if (modelsRes.ok) {
+                    const modelsData = await modelsRes.json();
+                    if (modelsData.models) {
+                        const availableModels = modelsData.models
+                            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+                            .map(m => m.name.replace('models/', ''));
+                        
+                        if (availableModels.length === 0) {
+                            throw new Error("API Key Valid, tetapi kunci tersebut diblokir dari semua model teks.");
+                        }
+
+                        // Memilih model terbaik yang TERSEDIA di akun Anda
+                        if (availableModels.includes('gemini-1.5-flash')) finalTargetModel = 'gemini-1.5-flash';
+                        else if (availableModels.includes('gemini-1.5-pro')) finalTargetModel = 'gemini-1.5-pro';
+                        else if (availableModels.includes('gemini-pro')) finalTargetModel = 'gemini-pro';
+                        else if (availableModels.includes('gemini-1.0-pro')) finalTargetModel = 'gemini-1.0-pro';
+                        else finalTargetModel = availableModels[0]; // Pakai model apa saja yang dikasih Google
+                        
+                        console.log("Auto-Scanner Memilih Model:", finalTargetModel);
+                    }
+                } else {
+                    if (modelsRes.status === 403 || modelsRes.status === 401 || modelsRes.status === 400) {
+                         throw new Error(`Akses Ditolak (${modelsRes.status}). Kunci API Anda tidak sah atau dihapus.`);
+                    }
+                }
+            } catch (scannerErr) {
+                 if (scannerErr.message.includes("Akses Ditolak") || scannerErr.message.includes("Kosong") || scannerErr.message.includes("Valid, tetapi")) {
+                     throw scannerErr; // Lempar error fatal ke atas
+                 }
+                 console.warn("Scanner model gagal jaringan, mencoba fallback default.", scannerErr);
+            }
+
+            // 2. EKSEKUSI PEMROSESAN AI DENGAN MODEL YANG SUDAH PASTI ADA
+            const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${finalTargetModel}:generateContent?key=${apiKey}`;
+            
+            // Payload super bersih tanpa SystemInstruction (menghindari error 400 pada model lawas)
+            const safePayload = {
+              contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA BERITA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }]
+            };
+
+            data = await fetchWithRetry(endpointUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(safePayload)
+            });
+          }
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          if (!textResponse) throw new Error("Google AI merespons, namun datanya kosong.");
+          if (!textResponse) throw new Error("Google AI berhasil merespons, namun data teksnya kosong.");
           
+          // Memisahkan dan Menata Output JSON
           let parsedData;
           try {
             const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
             const cleanJson = jsonMatch ? jsonMatch[0] : textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
             parsedData = JSON.parse(cleanJson);
           } catch (parseErr) {
-            console.error("JSON Parsing failed:", textResponse);
-            throw new Error("Format data dari AI rusak dan tidak bisa dibaca sistem.");
+            console.error("JSON Parsing failed. Output asli AI:", textResponse);
+            throw new Error("AI memberikan respons, tetapi format JSON rusak atau tidak sesuai instruksi.");
           }
           
           const kebijakanArr = parsedData.kebijakan || parsedData.rekomendasi_kebijakan || parsedData.rekomendasi || [];
@@ -439,25 +475,23 @@ Struktur JSON WAJIB:
           
           let friendlyErrorMsg = error.message || "Terjadi masalah jaringan atau koneksi terputus.";
           
-          // Menerjemahkan Error Kode Status menjadi Kalimat Mudah Dipahami
-          if (error.status === 404) {
-             friendlyErrorMsg = "Model AI tidak ditemukan (404). Kemungkinan Kunci API Anda tidak valid atau tidak memiliki akses ke Gemini 1.5.";
-          } else if (error.status === 400) {
-             friendlyErrorMsg = `Data ditolak oleh server (400). Detail: ${error.message}`;
-          } else if (error.status === 401 || error.status === 403) {
-             friendlyErrorMsg = "Akses Ditolak (401/403). Kunci API Anda salah, kedaluwarsa, atau tidak terhubung dengan benar.";
+          if (error.message.includes("Status 404") || error.status === 404) {
+             friendlyErrorMsg = "Model AI tidak ditemukan (404). Kunci API Anda tidak mengizinkan akses ke model apapun.";
+          } else if (error.message.includes("Status 400") || error.status === 400) {
+             friendlyErrorMsg = `Data ditolak oleh server Google (400). Format tidak sesuai.`;
+          } else if (error.message.includes("Akses Ditolak") || error.status === 401 || error.status === 403) {
+             friendlyErrorMsg = "Akses Ditolak (401/403). Kunci API Anda tidak valid. Ambil kunci baru di aistudio.google.com.";
           } else if (error.status === 429) {
              friendlyErrorMsg = "Sistem Google sedang terlalu sibuk (429). Mohon tunggu sekitar 30 detik lalu coba lagi.";
           } else if (error.message === "Failed to fetch") {
-             friendlyErrorMsg = "Gagal terhubung ke internet. Pastikan tidak ada AdBlocker/Antivirus yang memblokir akses ke server Google.";
+             friendlyErrorMsg = "Gagal terhubung ke internet. Pastikan tidak ada AdBlocker/Antivirus yang memblokir.";
           }
 
           setErrorMsg(`GAGAL: ${friendlyErrorMsg}`);
           
-          // Pesan error bertahan selama 20 detik agar sempat dibaca
-          setTimeout(() => setErrorMsg(null), 20000); 
+          setTimeout(() => setErrorMsg(null), 30000); 
         } finally {
-          setIsAnalyzing(false); // Mengembalikan tombol dari status 'Menganalisis...' ke 'Analytics'
+          setIsAnalyzing(false); 
         }
       };
 
