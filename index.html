@@ -293,6 +293,8 @@
           try {
             const response = await fetch(url, options);
             if (!response.ok) {
+               const errText = await response.text();
+               console.error(`Google API Error (${response.status}):`, errText);
                const error = new Error(`HTTP error! status: ${response.status}`);
                error.status = response.status;
                throw error;
@@ -375,13 +377,15 @@ Struktur JSON WAJIB:
             url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
-            if (!geminiApiKey || !geminiApiKey.startsWith("AIza")) {
+            const cleanedKey = geminiApiKey ? geminiApiKey.trim() : "";
+            if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
               setErrorMsg("Gagal: API Key Gemini belum terhubung. Pastikan Anda telah mengganti variabel SCRIPT_URL dengan link Apps Script milik Anda sendiri.");
               setIsAnalyzing(false);
-              return; // Menghentikan proses agar tidak error 400
+              return; // Menghentikan proses agar tidak error
             }
-            apiKey = geminiApiKey;
-            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+            apiKey = cleanedKey;
+            // Gunakan -latest untuk memastikan endpoint selalu mengarah ke model aktif terbaru
+            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
           }
 
           const data = await fetchWithRetry(url, {
@@ -428,9 +432,9 @@ Struktur JSON WAJIB:
         } catch (error) {
           console.error(error);
           if (error.status === 401 || error.status === 403 || (error.message && error.message.includes("401"))) {
-            setErrorMsg("Akses ditolak (Error 401). Mohon periksa kembali integrasi API Key di Google Script Anda.");
+            setErrorMsg("Akses ditolak (Error 401/403). Mohon periksa kembali API Key Anda di Google Script, pastikan tidak ada karakter tersembunyi.");
           } else if (error.status === 404 || (error.message && error.message.includes("404"))) {
-            setErrorMsg("Gagal menghubungi AI (Error 404). Sistem memastikan model terhubung. Coba lagi.");
+            setErrorMsg("Gagal menghubungi AI (Error 404). Model mungkin sedang tidak tersedia atau URL API Key tidak valid. Coba periksa console log.");
           } else if (error.status === 429 || (error.message && error.message.includes("429"))) {
             setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
           } else {
