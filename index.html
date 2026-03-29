@@ -366,7 +366,8 @@ Struktur JSON WAJIB:
               : [ 
                   { name: "gemini-1.5-flash", payload: payload15 },
                   { name: "gemini-1.5-pro", payload: payload15 },
-                  { name: "gemini-pro", payload: payload10 } // Model Universal
+                  { name: "gemini-1.0-pro", payload: payload10 },
+                  { name: "gemini-pro", payload: payload10 }
                 ];
 
           let data = null;
@@ -398,7 +399,10 @@ Struktur JSON WAJIB:
              } catch (err) {
                 lastFetchError = err;
                 console.warn(`Sistem Beralih: Model [${modelDef.name}] gagal merespon (${err.status}). Mencoba rute model/format lain...`);
-                // Jangan di-break di sini, biarkan loop mencoba model Universal (gemini-pro)
+                // Jangan di-break di sini jika error 404/400, biarkan loop mencoba model Universal (gemini-pro)
+                if (err.status === 401 || err.status === 403) {
+                    break;
+                }
              }
           }
 
@@ -450,14 +454,14 @@ Struktur JSON WAJIB:
           if (error.status === 401 || error.status === 403) {
             setErrorMsg("Akses Ditolak: API Key Anda tidak valid atau kuota habis.");
           } else if (error.status === 404) {
-            setErrorMsg("Model Tidak Ditemukan: Proyek Google Cloud Anda belum mengaktifkan Gemini API secara penuh.");
+            setErrorMsg("Kunci API belum diperbarui. WAJIB: Buka Google Apps Script > klik 'Terapkan' > 'Kelola deployment' > Edit (Pencil) > Versi Baru > Terapkan!");
           } else if (error.status === 400) {
             setErrorMsg("Format Salah (400): Server menolak format data API Key Anda.");
           } else {
             setErrorMsg(`Gagal (${error.status || 'Network'}): Pastikan Anda terhubung internet.`);
           }
           
-          setTimeout(() => setErrorMsg(null), 10000); 
+          setTimeout(() => setErrorMsg(null), 15000); 
         } finally {
           setIsAnalyzing(false);
         }
