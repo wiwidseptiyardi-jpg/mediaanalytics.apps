@@ -384,8 +384,8 @@ Struktur JSON WAJIB:
               return; // Menghentikan proses agar tidak error
             }
             apiKey = cleanedKey;
-            // Gunakan -latest untuk memastikan endpoint selalu mengarah ke model aktif terbaru
-            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent?key=${apiKey}`;
+            // Gunakan model yang stabil tanpa alias -latest agar tidak mendapatkan Error 404 (Not Found)
+            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
           }
 
           const data = await fetchWithRetry(url, {
