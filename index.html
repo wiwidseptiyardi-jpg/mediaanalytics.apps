@@ -287,44 +287,6 @@
         setErrorMsg(null);
       };
 
-      // FUNGSI RETRY PINTAR DENGAN PELACAK ERROR ASLI DARI GOOGLE
-      const fetchWithRetry = async (url, options, retries = 3) => {
-        const delays = [1000, 2000, 4000];
-        for (let i = 0; i < retries; i++) {
-          try {
-            const response = await fetch(url, options);
-            if (!response.ok) {
-               let errorDetail = "";
-               try {
-                 // Mencoba membaca detail pesan error dari JSON Google
-                 const errObj = await response.json();
-                 errorDetail = errObj.error ? errObj.error.message : JSON.stringify(errObj);
-               } catch (e) {
-                 // Fallback jika Google merespon dengan format Text murni
-                 errorDetail = await response.text();
-               }
-               
-               const error = new Error(errorDetail || `HTTP error! status: ${response.status}`);
-               error.status = response.status;
-               
-               // Jika error berkaitan dengan akses/not found, jangan buang waktu me-retry.
-               if (response.status >= 400 && response.status < 500 && response.status !== 429) {
-                   throw error;
-               }
-               if (i === retries - 1) throw error;
-            } else {
-               return await response.json(); // Berhasil
-            }
-          } catch (error) {
-            if (error.status >= 400 && error.status < 500 && error.status !== 429) {
-                throw error; 
-            }
-            if (i === retries - 1) throw error;
-            await new Promise(res => setTimeout(res, delays[i]));
-          }
-        }
-      };
-
       const generateAnalysis = async () => {
         if (!formData.title || !formData.content) {
           setErrorMsg("Mohon isi Judul dan Narasi Konten Berita terlebih dahulu.");
@@ -353,7 +315,8 @@ Struktur JSON WAJIB:
 - "kebijakan": array of string (WAJIB ADA! Berikan 3-8 poin rekomendasi kebijakan/tindak lanjut operasional oleh pemerintah atau pemangku kepentingan untuk merespon isu secara nyata. SANGAT SPESIFIK dan dapat langsung dieksekusi. Format tiap string: 'Nama Aksi/Program: Uraian detail langkah eksekusinya').
 - "strategi_komunikasi": array of string (WAJIB ADA! Berikan 3-8 poin strategi komunikasi publik atau narasi kunci oleh pemerintah untuk merespon isu. Format tiap string: 'Taktik Komunikasi: Uraian detail pesan atau eksekusinya').`;
 
-        const payload = {
+        // 1. PAYLOAD UNTUK GEMINI 1.5 (Model Baru dengan Fitur Schema)
+        const payload15 = {
           contents: [{ parts: [{ text: `Judul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
           generationConfig: {
@@ -369,54 +332,80 @@ Struktur JSON WAJIB:
                 kebijakan: { type: "ARRAY", items: { type: "STRING" } },
                 strategi_komunikasi: { type: "ARRAY", items: { type: "STRING" } }
               },
-              required: [
-                "resume", 
-                "swot_kekuatan", 
-                "swot_kelemahan", 
-                "swot_peluang", 
-                "swot_ancaman", 
-                "kebijakan", 
-                "strategi_komunikasi"
-              ]
+              required: ["resume", "swot_kekuatan", "swot_kelemahan", "swot_peluang", "swot_ancaman", "kebijakan", "strategi_komunikasi"]
             }
           }
         };
 
+        // 2. PAYLOAD UNTUK GEMINI 1.0 (Model Lama Universal - Mengakali Error 400 systemInstruction)
+        const payload10 = {
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n[INSTRUKSI WAJIB: OUTPUT HARUS DALAM FORMAT JSON SAJA TANPA MARKDOWN]\n\nJudul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }]
+        };
+
         try {
           let apiKey = "";
-          let targetModel = "";
-          
-          // DETEKSI LINGKUNGAN YANG KETAT
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
-            targetModel = "gemini-2.5-flash-preview-09-2025";
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
             const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
-            
             if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
               setErrorMsg("Gagal: API Key Gemini belum terhubung atau format tidak valid. Pastikan variabel SCRIPT_URL sudah benar.");
               setIsAnalyzing(false);
               return; 
             }
             apiKey = cleanedKey;
-            // KITA FOKUS HANYA PADA 1 MODEL UTAMA INI. Jika gagal, error aslinya akan terlihat.
-            targetModel = "gemini-1.5-flash"; 
           }
 
-          // MENGGUNAKAN JALUR v1beta (WAJIB UNTUK SYSTEM INSTRUCTION & JSON SCHEMA)
-          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
-          
+          // DAFTAR MODEL "ULTIMATE FALLBACK": 
+          // Jika API Key ditolak di model 1.5, sistem akan otomatis merombak format dan menembak model 1.0
+          const modelsToTry = isCanvasEnv 
+              ? [ { name: "gemini-2.5-flash-preview-09-2025", payload: payload15 } ] 
+              : [ 
+                  { name: "gemini-1.5-flash", payload: payload15 },
+                  { name: "gemini-1.5-pro", payload: payload15 },
+                  { name: "gemini-pro", payload: payload10 } // Model Universal
+                ];
+
           let data = null;
-          
-          // Menjalankan Fetch secara langsung tanpa Loop Fallback
-          data = await fetchWithRetry(endpointUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
-          });
+          let isSuccess = false;
+          let lastFetchError = null;
+
+          // SISTEM LOOP PINTAR
+          for (const modelDef of modelsToTry) {
+             try {
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelDef.name}:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(endpointUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(modelDef.payload)
+                });
+
+                if (!response.ok) {
+                   let errorDetail = await response.text();
+                   const error = new Error(errorDetail);
+                   error.status = response.status;
+                   throw error;
+                }
+                
+                data = await response.json();
+                isSuccess = true;
+                console.log("Berhasil menggunakan model:", modelDef.name);
+                break; // Keluar dari loop pencarian karena sudah sukses!
+             } catch (err) {
+                lastFetchError = err;
+                console.warn(`Sistem Beralih: Model [${modelDef.name}] gagal merespon (${err.status}). Mencoba rute model/format lain...`);
+                // Jangan di-break di sini, biarkan loop mencoba model Universal (gemini-pro)
+             }
+          }
+
+          // Jika semua model gagal (API Key benar-benar mati/habis kuota)
+          if (!isSuccess) {
+             throw lastFetchError;
+          }
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!textResponse) throw new Error("Respons AI kosong");
@@ -457,21 +446,18 @@ Struktur JSON WAJIB:
           console.error("ANALYSIS ERROR:", error);
           const errMsg = error.message || "Terjadi kesalahan yang tidak diketahui.";
           
-          // PENAMPILAN ERROR DETAIL DARI GOOGLE
+          // PENAMPILAN ERROR DETAIL
           if (error.status === 401 || error.status === 403) {
-            setErrorMsg(`Akses Ditolak (${error.status}): API Key mungkin salah atau kuota habis. Respon: ${errMsg.substring(0, 100)}`);
+            setErrorMsg("Akses Ditolak: API Key Anda tidak valid atau kuota habis.");
           } else if (error.status === 404) {
-            setErrorMsg(`Model Tidak Ditemukan (${error.status}): Respon Google: ${errMsg.substring(0, 120)}`);
+            setErrorMsg("Model Tidak Ditemukan: Proyek Google Cloud Anda belum mengaktifkan Gemini API secara penuh.");
           } else if (error.status === 400) {
-            setErrorMsg(`Format Salah (${error.status}): Payload JSON ditolak server. Respon Google: ${errMsg.substring(0, 120)}`);
-          } else if (error.status === 429) {
-            setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
+            setErrorMsg("Format Salah (400): Server menolak format data API Key Anda.");
           } else {
-            setErrorMsg(`Gagal (${error.status || 'Network'}): Pastikan Anda terhubung internet. Detail: ${errMsg.substring(0, 120)}`);
+            setErrorMsg(`Gagal (${error.status || 'Network'}): Pastikan Anda terhubung internet.`);
           }
           
-          // Memperlama waktu tampil error agar mudah dibaca pengguna
-          setTimeout(() => setErrorMsg(null), 20000); 
+          setTimeout(() => setErrorMsg(null), 10000); 
         } finally {
           setIsAnalyzing(false);
         }
