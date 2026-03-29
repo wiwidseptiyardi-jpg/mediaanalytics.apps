@@ -287,8 +287,9 @@
         setErrorMsg(null);
       };
 
-      const fetchWithRetry = async (url, options, retries = 5) => {
-        const delays = [1000, 2000, 4000, 8000, 16000];
+      // FUNGSI RETRY PINTAR: Langsung gagal (fail fast) jika kode status adalah 400, 401, 403, 404
+      const fetchWithRetry = async (url, options, retries = 3) => {
+        const delays = [1000, 2000, 4000];
         for (let i = 0; i < retries; i++) {
           try {
             const response = await fetch(url, options);
@@ -297,10 +298,20 @@
                console.error(`Google API Error (${response.status}):`, errText);
                const error = new Error(`HTTP error! status: ${response.status}`);
                error.status = response.status;
-               throw error;
+               
+               // Jika error berkaitan dengan akses atau model yang tidak ditemukan, Dilarang di-retry.
+               if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+                   throw error;
+               }
+               if (i === retries - 1) throw error;
+            } else {
+               return await response.json(); // Berhasil
             }
-            return await response.json();
           } catch (error) {
+            // Melempar error ke atas agar loop Auto-Fallback bisa segera menangkapnya
+            if (error.status >= 400 && error.status < 500 && error.status !== 429) {
+                throw error; 
+            }
             if (i === retries - 1) throw error;
             await new Promise(res => setTimeout(res, delays[i]));
           }
@@ -366,33 +377,60 @@ Struktur JSON WAJIB:
 
         try {
           let apiKey = "";
-          let url = "";
-
+          
           // DETEKSI LINGKUNGAN YANG KETAT
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
+          // DAFTAR MODEL FALLBACK OTOMATIS: Jika model pertama 404, pindah ke model berikutnya
+          const modelsToTry = isCanvasEnv 
+              ? ["gemini-2.5-flash-preview-09-2025"] 
+              : ["gemini-1.5-flash", "gemini-1.5-flash-8b", "gemini-1.5-pro", "gemini-1.5-flash-latest"];
+
           if (isCanvasEnv) {
-            // Lingkungan Uji Coba Canvas (Aman menggunakan API kosong/Proxy)
-            apiKey = "";
-            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+            apiKey = ""; // Sandbox Proxy Mode
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
-            const cleanedKey = geminiApiKey ? geminiApiKey.trim() : "";
+            // Sanitasi Sangat Ketat: Hilangkan seluruh spasi, tab, enter yang mungkin terbawa saat copy-paste.
+            const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
+            
             if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
-              setErrorMsg("Gagal: API Key Gemini belum terhubung. Pastikan Anda telah mengganti variabel SCRIPT_URL dengan link Apps Script milik Anda sendiri.");
+              setErrorMsg("Gagal: API Key Gemini belum terhubung atau format tidak valid. Pastikan variabel SCRIPT_URL sudah benar.");
               setIsAnalyzing(false);
-              return; // Menghentikan proses agar tidak error
+              return; 
             }
             apiKey = cleanedKey;
-            // Gunakan model yang stabil tanpa alias -latest agar tidak mendapatkan Error 404 (Not Found)
-            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
           }
 
-          const data = await fetchWithRetry(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-          });
+          let data = null;
+          let isSuccess = false;
+          let lastFetchError = null;
+
+          // SISTEM LOOP AUTO-FALLBACK
+          for (const model of modelsToTry) {
+             try {
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+                data = await fetchWithRetry(endpointUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                isSuccess = true;
+                break; // Keluar dari loop pencarian jika sukses
+             } catch (err) {
+                lastFetchError = err;
+                console.warn(`Sistem Beralih: Model [${model}] gagal merespon (${err.status}). Mencoba rute model lain...`);
+                // Hentikan pencarian seketika jika ternyata kunci API-nya yang salah
+                if (err.status === 401 || err.status === 403) {
+                    break;
+                }
+             }
+          }
+
+          // Jika semua model dalam daftar telah habis dicoba dan gagal:
+          if (!isSuccess) {
+             throw lastFetchError;
+          }
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!textResponse) throw new Error("Respons AI kosong");
@@ -434,7 +472,7 @@ Struktur JSON WAJIB:
           if (error.status === 401 || error.status === 403 || (error.message && error.message.includes("401"))) {
             setErrorMsg("Akses ditolak (Error 401/403). Mohon periksa kembali API Key Anda di Google Script, pastikan tidak ada karakter tersembunyi.");
           } else if (error.status === 404 || (error.message && error.message.includes("404"))) {
-            setErrorMsg("Gagal menghubungi AI (Error 404). Model mungkin sedang tidak tersedia atau URL API Key tidak valid. Coba periksa console log.");
+            setErrorMsg("Gagal menghubungi AI secara keseluruhan (Error 404). Pastikan proyek API Google Cloud Anda sudah aktif.");
           } else if (error.status === 429 || (error.message && error.message.includes("429"))) {
             setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
           } else {
