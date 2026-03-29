@@ -316,7 +316,6 @@
                return await response.json(); // Berhasil
             }
           } catch (error) {
-            // Melempar error ke atas agar loop Auto-Fallback bisa segera menangkapnya
             if (error.status >= 400 && error.status < 500 && error.status !== 429) {
                 throw error; 
             }
@@ -385,20 +384,16 @@ Struktur JSON WAJIB:
 
         try {
           let apiKey = "";
+          let targetModel = "";
           
           // DETEKSI LINGKUNGAN YANG KETAT
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
-          // DAFTAR MODEL FALLBACK OTOMATIS
-          const modelsToTry = isCanvasEnv 
-              ? ["gemini-2.5-flash-preview-09-2025"] 
-              : ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b"];
-
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
+            targetModel = "gemini-2.5-flash-preview-09-2025";
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
-            // Sanitasi Sangat Ketat: Hilangkan seluruh spasi, tab, enter yang mungkin terbawa saat copy-paste.
             const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
             
             if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
@@ -407,42 +402,21 @@ Struktur JSON WAJIB:
               return; 
             }
             apiKey = cleanedKey;
+            // KITA FOKUS HANYA PADA 1 MODEL UTAMA INI. Jika gagal, error aslinya akan terlihat.
+            targetModel = "gemini-1.5-flash"; 
           }
 
+          // MENGGUNAKAN JALUR v1beta (WAJIB UNTUK SYSTEM INSTRUCTION & JSON SCHEMA)
+          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${targetModel}:generateContent?key=${apiKey}`;
+          
           let data = null;
-          let isSuccess = false;
-          let lastFetchError = null;
-
-          // SISTEM LOOP AUTO-FALLBACK
-          for (const model of modelsToTry) {
-             try {
-                const cleanModel = model.trim();
-                // KEMBALI MENGGUNAKAN v1beta: Ini adalah kunci penyelesaian Error 400!
-                // Endpoint v1 biasa menolak fitur JSON Schema dan SystemInstruction.
-                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
-                
-                data = await fetchWithRetry(endpointUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
-                });
-                
-                isSuccess = true;
-                break; // Keluar dari loop pencarian jika sukses
-             } catch (err) {
-                lastFetchError = err;
-                console.warn(`Sistem Beralih: Model [${model}] gagal merespon (${err.status}). Mencoba rute model lain...`);
-                // Hentikan pencarian jika masalahnya murni API Key yang salah atau ditolak (Bukan karena Schema)
-                if (err.status === 401 || err.status === 403) {
-                    break;
-                }
-             }
-          }
-
-          // Jika semua model dalam daftar telah habis dicoba dan gagal:
-          if (!isSuccess) {
-             throw lastFetchError;
-          }
+          
+          // Menjalankan Fetch secara langsung tanpa Loop Fallback
+          data = await fetchWithRetry(endpointUrl, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
           if (!textResponse) throw new Error("Respons AI kosong");
@@ -497,7 +471,7 @@ Struktur JSON WAJIB:
           }
           
           // Memperlama waktu tampil error agar mudah dibaca pengguna
-          setTimeout(() => setErrorMsg(null), 15000); 
+          setTimeout(() => setErrorMsg(null), 20000); 
         } finally {
           setIsAnalyzing(false);
         }
