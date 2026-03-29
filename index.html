@@ -1,0 +1,995 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="description" content="MediaAnalytics.AI - Aplikasi Pembuat Analisis Isu Otomatis menggunakan AI" />
+  
+  <title>MediaAnalytics.AI</title>
+  
+  <!-- Tipografi Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #020617;
+      color: #f8fafc;
+      font-family: 'Inter', sans-serif;
+    }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #334155; border-radius: 20px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover { background-color: #475569; }
+    .color-scheme-dark { color-scheme: dark; }
+  </style>
+
+  <!-- Peta Impor (Import Map) untuk memuat library React & Firebase langsung dari CDN -->
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.2.0",
+        "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+        "lucide-react": "https://esm.sh/lucide-react@0.344.0",
+        "firebase/app": "https://www.gstatic.com/firebasejs/10.8.0/firebase-app.js",
+        "firebase/auth": "https://www.gstatic.com/firebasejs/10.8.0/firebase-auth.js",
+        "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore.js"
+      }
+    }
+  </script>
+
+  <!-- Babel Standalone untuk menerjemahkan sintaks JSX di dalam browser -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- KODE APLIKASI REACT UTAMA -->
+  <script type="text/babel" data-type="module">
+    import React, { useState, useRef, useEffect } from 'react';
+    import { createRoot } from 'react-dom/client';
+    import { 
+      FileText, Calendar, Type, Upload, Cpu, Download, Copy, CheckCircle, 
+      AlertTriangle, FileImage, Mic, Video, Printer, Link as LinkIcon, 
+      ExternalLink, Megaphone, FileOutput, LogOut, UserPlus, Lock, 
+      Mail, Key, BarChart2, Globe, Activity 
+    } from 'lucide-react';
+
+    import { initializeApp } from 'firebase/app';
+    import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut } from 'firebase/auth';
+    import { getFirestore, doc, setDoc } from 'firebase/firestore';
+
+    // =========================================================================
+    // KONFIGURASI FIREBASE (Aman diletakkan di Front-End / Publik)
+    // =========================================================================
+    const myFirebaseConfig = {
+      apiKey: "AIzaSyDPX1o4ps_Pthwx3HEiGYfPnoiHZIfRv40",
+      authDomain: "media-analytics-d79db.firebaseapp.com",
+      projectId: "media-analytics-d79db",
+      storageBucket: "media-analytics-d79db.firebasestorage.app",
+      messagingSenderId: "174374714022",
+      appId: "1:174374714022:web:f35f576a58bc3a2df61267"
+    };
+
+    // Inisialisasi langsung agar sistem Login (Auth) tidak tertunda/null
+    const app = initializeApp(myFirebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+
+    const App = () => {
+      // --- STATE OTENTIKASI & KONFIGURASI ---
+      const [user, setUser] = useState(null);
+      const [authView, setAuthView] = useState('login'); 
+      const [authForm, setAuthForm] = useState({ email: '', password: '', accessCode: '' });
+      const [authLoading, setAuthLoading] = useState(false);
+      const [authMessage, setAuthMessage] = useState({ type: '', text: '' });
+      const [geminiApiKey, setGeminiApiKey] = useState("");
+      const [isSystemInit, setIsSystemInit] = useState(false);
+      const [dbWarning, setDbWarning] = useState(null);
+
+      // Link Backend Google Apps Script Anda (Untuk Kunci Gemini & Validasi Daftar)
+      const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxxpvPkfPM88Xs5J2cJL6r112PKrahH6f0eTUJrc8ArJrjfzyY7sqdjnK-Zbm0vGvdF0A/exec";
+
+      // State untuk Input Data
+      const [formData, setFormData] = useState({
+        date: new Date().toISOString().split('T')[0],
+        title: '',
+        content: '',
+        sourceUrl: '',
+        files: []
+      });
+
+      // State untuk Analisis
+      const [isAnalyzing, setIsAnalyzing] = useState(false);
+      const [result, setResult] = useState(null);
+      const [copiedSection, setCopiedSection] = useState(null);
+      const [errorMsg, setErrorMsg] = useState(null);
+
+      // =========================================================================
+      // MEMUAT STATUS PENGGUNA & KUNCI RAHASIA GEMINI
+      // =========================================================================
+      useEffect(() => {
+        // 1. Tarik API Key Gemini dari Server GS secara rahasia
+        const fetchGeminiKey = async () => {
+          try {
+            const response = await fetch(`${SCRIPT_URL}?action=getConfig`);
+            const secureData = await response.json();
+            if (secureData.geminiApiKey) {
+              setGeminiApiKey(secureData.geminiApiKey);
+            }
+          } catch (error) {
+            console.error("Gagal menarik kunci Gemini dari backend GS:", error);
+          }
+        };
+        fetchGeminiKey();
+
+        // 2. Pantau status Login Pengguna (Langsung dari Firebase Anda)
+        const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+          setUser(currentUser);
+          setIsSystemInit(true); // Hilangkan layar loading awal
+        });
+
+        return () => unsubscribe();
+      }, []);
+
+      const handleAuthInputChange = (e) => {
+        setAuthForm({ ...authForm, [e.target.name]: e.target.value });
+      };
+
+      const saveUserToSheetAndFirestore = async (userRecord) => {
+        // 1. Simpan ke Firestore Anda
+        try {
+          const userDocRef = doc(db, 'users', userRecord.uid);
+          await setDoc(userDocRef, {
+            email: userRecord.email,
+            uid: userRecord.uid,
+            registeredAt: new Date().toISOString()
+          });
+          setDbWarning(null);
+        } catch (error) {
+          console.error("Gagal menyimpan ke Firestore:", error);
+          if (error.message.includes("Missing or insufficient permissions") || error.message.includes("permission")) {
+            setDbWarning("Perhatian: Database Firestore Anda masih terkunci. Harap ubah 'Rules' Firestore menjadi 'allow read, write: if request.auth != null;' di Firebase Console.");
+          }
+        }
+
+        // 2. Rekap ke Google Sheet
+        try {
+          await fetch(SCRIPT_URL, {
+            method: 'POST',
+            mode: 'no-cors',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              uid: userRecord.uid,
+              email: userRecord.email,
+              timestamp: new Date().toISOString()
+            })
+          });
+        } catch (error) {
+          console.error("Gagal merekap ke Google Sheet:", error);
+        }
+      };
+
+      const handleLogin = async (e) => {
+        e.preventDefault();
+        setAuthLoading(true);
+        setAuthMessage({ type: '', text: '' });
+        setDbWarning(null);
+        try {
+          await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
+        } catch (error) {
+          setAuthMessage({ type: 'error', text: 'Login gagal. Periksa kembali email dan password Anda.' });
+        } finally {
+          setAuthLoading(false);
+        }
+      };
+
+      const handleSignup = async (e) => {
+        e.preventDefault();
+        setAuthLoading(true);
+        setAuthMessage({ type: '', text: '' });
+        setDbWarning(null);
+
+        try {
+          // VALIDASI KODE AKSES MELALUI BACKEND GS
+          try {
+            const valRes = await fetch(`${SCRIPT_URL}?action=validateCode&code=${authForm.accessCode}`);
+            const valData = await valRes.json();
+
+            if (!valData.valid) {
+              setAuthMessage({ type: 'error', text: 'Kode Akses tidak valid. Silakan hubungi Admin.' });
+              setAuthLoading(false);
+              return;
+            }
+          } catch (gsError) {
+            // Fallback: Jika GS gagal diakses karena CORS/Jaringan, blokir proses daftar
+            setAuthMessage({ type: 'error', text: 'Gagal memvalidasi kode akses (Server GS tidak merespon).' });
+            setAuthLoading(false);
+            return;
+          }
+
+          // Jika kode akses valid, daftarkan akun ke Firebase
+          const userCredential = await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+          await saveUserToSheetAndFirestore(userCredential.user);
+          setAuthMessage({ type: 'success', text: 'Registrasi berhasil! Anda masuk secara otomatis.' });
+        } catch (error) {
+          setAuthMessage({ type: 'error', text: 'Registrasi gagal: ' + error.message });
+        } finally {
+          setAuthLoading(false);
+        }
+      };
+
+      const handleResetPassword = async (e) => {
+        e.preventDefault();
+        setAuthLoading(true);
+        setAuthMessage({ type: '', text: '' });
+        try {
+          await sendPasswordResetEmail(auth, authForm.email);
+          setAuthMessage({ type: 'success', text: 'Tautan reset password telah dikirim ke email Anda.' });
+        } catch (error) {
+          setAuthMessage({ type: 'error', text: 'Gagal mengirim email reset: ' + error.message });
+        } finally {
+          setAuthLoading(false);
+        }
+      };
+
+      const handleLogout = () => {
+        signOut(auth);
+        setFormData({
+          date: new Date().toISOString().split('T')[0],
+          title: '',
+          content: '',
+          sourceUrl: '',
+          files: []
+        });
+        setResult(null);
+        setErrorMsg(null);
+        setDbWarning(null);
+      };
+
+      const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+      };
+
+      const handleReset = () => {
+        setFormData({
+          date: new Date().toISOString().split('T')[0],
+          title: '',
+          content: '',
+          sourceUrl: '',
+          files: []
+        });
+        setResult(null);
+        setErrorMsg(null);
+      };
+
+      const fetchWithRetry = async (url, options, retries = 5) => {
+        const delays = [1000, 2000, 4000, 8000, 16000];
+        for (let i = 0; i < retries; i++) {
+          try {
+            const response = await fetch(url, options);
+            if (!response.ok) {
+               const error = new Error(`HTTP error! status: ${response.status}`);
+               error.status = response.status;
+               throw error;
+            }
+            return await response.json();
+          } catch (error) {
+            if (i === retries - 1) throw error;
+            await new Promise(res => setTimeout(res, delays[i]));
+          }
+        }
+      };
+
+      const generateAnalysis = async () => {
+        if (!formData.title || !formData.content) {
+          setErrorMsg("Mohon isi Judul dan Narasi Konten Berita terlebih dahulu.");
+          setTimeout(() => setErrorMsg(null), 3000);
+          return;
+        }
+
+        if (formData.content.length > 50000) {
+          setErrorMsg("Kapasitas teks melebihi batas (maksimal 50.000 karakter). Mohon ringkas narasi berita Anda.");
+          setTimeout(() => setErrorMsg(null), 5000);
+          return;
+        }
+
+        setIsAnalyzing(true);
+        setErrorMsg(null);
+
+        const systemPrompt = `Anda adalah Analis Kebijakan Publik dan Pakar Hubungan Masyarakat Senior di pemerintahan.
+Tugas Anda adalah membedah teks berita/laporan yang diberikan secara tajam dan mendalam menggunakan kerangka Analisis SWOT, dan menghasilkan output JSON murni (tanpa markdown).
+PENTING: Gunakan nama key JSON persis seperti format di bawah ini! Jangan menuliskan penomoran (seperti 1., 2., 3.) di dalam string karena sistem sudah menomorinya otomatis.
+Struktur JSON WAJIB:
+- "resume": string (Ringkasan eksekutif berita memuat intisari 5W+1H).
+- "swot_kekuatan": array of string (Strengths: poin kekuatan instansi terkait isu ini. Format tiap string: 'Judul Poin: Uraian detail').
+- "swot_kelemahan": array of string (Weaknesses: poin kelemahan instansi. Format tiap string: 'Judul Poin: Uraian detail').
+- "swot_peluang": array of string (Opportunities: poin peluang eksternal. Format tiap string: 'Judul Poin: Uraian detail').
+- "swot_ancaman": array of string (Threats: poin ancaman/risiko eskalasi. Format tiap string: 'Judul Poin: Uraian detail').
+- "kebijakan": array of string (WAJIB ADA! Berikan 3-8 poin rekomendasi kebijakan/tindak lanjut operasional oleh pemerintah atau pemangku kepentingan untuk merespon isu secara nyata. SANGAT SPESIFIK dan dapat langsung dieksekusi. Format tiap string: 'Nama Aksi/Program: Uraian detail langkah eksekusinya').
+- "strategi_komunikasi": array of string (WAJIB ADA! Berikan 3-8 poin strategi komunikasi publik atau narasi kunci oleh pemerintah untuk merespon isu. Format tiap string: 'Taktik Komunikasi: Uraian detail pesan atau eksekusinya').`;
+
+        const payload = {
+          contents: [{ parts: [{ text: `Judul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }],
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                resume: { type: "STRING" },
+                swot_kekuatan: { type: "ARRAY", items: { type: "STRING" } },
+                swot_kelemahan: { type: "ARRAY", items: { type: "STRING" } },
+                swot_peluang: { type: "ARRAY", items: { type: "STRING" } },
+                swot_ancaman: { type: "ARRAY", items: { type: "STRING" } },
+                kebijakan: { type: "ARRAY", items: { type: "STRING" } },
+                strategi_komunikasi: { type: "ARRAY", items: { type: "STRING" } }
+              },
+              required: [
+                "resume", 
+                "swot_kekuatan", 
+                "swot_kelemahan", 
+                "swot_peluang", 
+                "swot_ancaman", 
+                "kebijakan", 
+                "strategi_komunikasi"
+              ]
+            }
+          }
+        };
+
+        try {
+          let apiKey = "";
+          let url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
+
+          if (typeof __app_id === 'undefined' && geminiApiKey && geminiApiKey.startsWith("AIza")) {
+            apiKey = geminiApiKey;
+            url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`;
+          }
+
+          const data = await fetchWithRetry(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          
+          let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (!textResponse) throw new Error("Respons AI kosong");
+          
+          let parsedData;
+          try {
+            const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0] : textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+            parsedData = JSON.parse(cleanJson);
+          } catch (parseErr) {
+            console.error("JSON Parsing failed:", textResponse);
+            throw new Error("Format respons AI tidak dikenali.");
+          }
+          
+          const kebijakanArr = parsedData.kebijakan || parsedData.rekomendasi_kebijakan || parsedData.rekomendasi || [];
+          const komunikasiArr = parsedData.strategi_komunikasi || parsedData.strategi || parsedData.komunikasi || [];
+
+          const parseToStringArray = (arr) => arr.map(item => {
+            if (typeof item === 'object' && item !== null) {
+              const values = Object.values(item);
+              return values.length > 1 ? `${values[0]}: ${values.slice(1).join(' ')}` : String(values[0]);
+            }
+            return String(item);
+          });
+
+          setResult({
+            resume: typeof parsedData.resume === 'string' ? parsedData.resume : "Resume tidak tersedia.",
+            swot_kekuatan: Array.isArray(parsedData.swot_kekuatan) ? parseToStringArray(parsedData.swot_kekuatan) : ["Tidak tersedia."],
+            swot_kelemahan: Array.isArray(parsedData.swot_kelemahan) ? parseToStringArray(parsedData.swot_kelemahan) : ["Tidak tersedia."],
+            swot_peluang: Array.isArray(parsedData.swot_peluang) ? parseToStringArray(parsedData.swot_peluang) : ["Tidak tersedia."],
+            swot_ancaman: Array.isArray(parsedData.swot_ancaman) ? parseToStringArray(parsedData.swot_ancaman) : ["Tidak tersedia."],
+            kebijakan: Array.isArray(kebijakanArr) && kebijakanArr.length > 0 ? parseToStringArray(kebijakanArr) : ["Tidak ada rekomendasi kebijakan spesifik yang dihasilkan."],
+            strategi_komunikasi: Array.isArray(komunikasiArr) && komunikasiArr.length > 0 ? parseToStringArray(komunikasiArr) : ["Tidak ada strategi komunikasi spesifik yang dihasilkan."],
+            sourceUrl: formData.sourceUrl
+          });
+
+        } catch (error) {
+          console.error(error);
+          if (error.status === 401 || error.status === 403 || (error.message && error.message.includes("401"))) {
+            setErrorMsg("Akses ditolak (Error 401). Mohon periksa kembali integrasi API Key di Google Sheet Anda.");
+          } else if (error.status === 404 || (error.message && error.message.includes("404"))) {
+            setErrorMsg("Gagal menghubungi AI (Error 404). Sistem memastikan model terhubung. Coba lagi.");
+          } else if (error.status === 429 || (error.message && error.message.includes("429"))) {
+            setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
+          } else {
+            setErrorMsg("Gagal memproses analisis AI. Pastikan teks tidak mengandung karakter aneh dan coba lagi.");
+          }
+          setTimeout(() => setErrorMsg(null), 6000);
+        } finally {
+          setIsAnalyzing(false);
+        }
+      };
+
+      const copyToClipboard = (text, sectionName) => {
+        navigator.clipboard.writeText(text);
+        setCopiedSection(sectionName);
+        setTimeout(() => setCopiedSection(null), 2000);
+      };
+
+      const getFormattedText = () => {
+        if (!result) return '';
+        const linkText = result.sourceUrl ? `\nLink Sumber: ${result.sourceUrl}` : '';
+        
+        const formatSwot = (arr) => (arr || []).map(i => `- ${i}`).join('\n');
+        
+        return `MediaAnalytics.AI\nTanggal: ${formData.date}\nJudul: ${formData.title}${linkText}\n\n1. RESUME BERITA\n${result.resume}\n\n2. ANALISIS SWOT\n[S - Kekuatan / Strengths]\n${formatSwot(result.swot_kekuatan)}\n\n[W - Kelemahan / Weaknesses]\n${formatSwot(result.swot_kelemahan)}\n\n[O - Peluang / Opportunities]\n${formatSwot(result.swot_peluang)}\n\n[T - Ancaman / Threats]\n${formatSwot(result.swot_ancaman)}\n\n3. REKOMENDASI KEBIJAKAN\n${(result.kebijakan || []).join('\n')}\n\n4. STRATEGI KOMUNIKASI\n${(result.strategi_komunikasi || []).join('\n')}`;
+      };
+
+      const downloadWord = () => {
+        const linkHtml = result.sourceUrl ? `<p><strong>Link Sumber:</strong> <a href="${result.sourceUrl}">${result.sourceUrl}</a></p>` : '';
+        
+        const formatSwotHtml = (arr) => `<ul>${(arr || []).map(i => {
+          const parts = i.split(':');
+          const title = parts[0];
+          const desc = parts.slice(1).join(':').trim();
+          return `<li>${desc ? `<strong>${title}:</strong> ${desc}` : i}</li>`;
+        }).join('')}</ul>`;
+
+        const formatListHtml = (arr) => `<ol>${(arr || []).map(i => {
+          const parts = i.split(':');
+          const title = parts[0];
+          const desc = parts.slice(1).join(':').trim();
+          return `<li>${desc ? `<strong>${title}:</strong> ${desc}` : i}</li>`;
+        }).join('')}</ol>`;
+
+        const content = `
+          <html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'>
+          <head>
+            <meta charset='utf-8'>
+            <style>
+              body { font-family: 'Times New Roman', serif; font-size: 12pt; line-height: 1.5; color: #000; }
+              h1 { text-align: center; font-size: 16pt; font-weight: bold; margin-bottom: 24px; text-transform: uppercase; }
+              h3 { font-size: 13pt; font-weight: bold; margin-top: 18px; margin-bottom: 8px; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+              h4 { font-size: 12pt; font-weight: bold; margin-top: 12px; margin-bottom: 4px; color: #333; }
+              p { text-align: justify; margin-bottom: 12px; }
+              ul, ol { margin-bottom: 12px; }
+              li { margin-bottom: 6px; }
+              .meta-info { margin-bottom: 20px; padding: 15px; border: 1px solid #000; background-color: #f9f9f9; }
+              .swot-box { border: 1px solid #ccc; padding: 10px; margin-bottom: 10px; background-color: #fafafa; }
+            </style>
+          </head>
+          <body>
+            <h1>MediaAnalytics.AI</h1>
+            <div class="meta-info">
+              <p><strong>Hari/Tanggal:</strong> ${formData.date}</p>
+              <p><strong>Judul Isu:</strong> ${formData.title}</p>
+              ${linkHtml}
+            </div>
+            
+            <h3>1. RESUME BERITA</h3>
+            <p>${result.resume}</p>
+
+            <h3>2. ANALISIS SWOT</h3>
+            <div class="swot-box">
+              <h4>S - Kekuatan (Strengths)</h4>
+              ${formatSwotHtml(result.swot_kekuatan)}
+            </div>
+            <div class="swot-box">
+              <h4>W - Kelemahan (Weaknesses)</h4>
+              ${formatSwotHtml(result.swot_kelemahan)}
+            </div>
+            <div class="swot-box">
+              <h4>O - Peluang (Opportunities)</h4>
+              ${formatSwotHtml(result.swot_peluang)}
+            </div>
+            <div class="swot-box">
+              <h4>T - Ancaman (Threats)</h4>
+              ${formatSwotHtml(result.swot_ancaman)}
+            </div>
+
+            <h3>3. REKOMENDASI KEBIJAKAN</h3>
+            ${formatListHtml(result.kebijakan)}
+            
+            <h3>4. STRATEGI KOMUNIKASI</h3>
+            ${formatListHtml(result.strategi_komunikasi)}
+          </body>
+          </html>
+        `;
+        const blob = new Blob([content], { type: 'application/msword' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = `Laporan_Analisis_${formData.date}.doc`;
+        link.click();
+      };
+
+      // --- RENDER HALAMAN LOGIN / REGISTER (JIKA BELUM LOGIN) ---
+      if (!isSystemInit) {
+        return (
+          <div className="min-h-screen bg-slate-950 flex items-center justify-center relative overflow-hidden">
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-cyan-600/20 rounded-full blur-[120px]"></div>
+            <div className="relative z-10 flex flex-col items-center">
+              <Cpu size={48} className="text-cyan-400 animate-pulse mb-4" />
+              <div className="text-cyan-400 tracking-widest text-sm font-semibold animate-pulse text-center leading-relaxed">
+                MENGINISIALISASI SERVER KEAMANAN...<br/>
+                <span className="text-[10px] text-slate-500">Membangun koneksi terenkripsi</span>
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      if (!user) {
+        return (
+          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4 relative overflow-hidden font-sans">
+            
+            {/* Background Image: Kompilasi Berbagai Media (Cetak, Online, Sosial) */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-[0.35] mix-blend-screen filter grayscale-[30%]">
+              {/* Media Cetak (Newspapers) */}
+              <div className="absolute -top-[15%] -left-[5%] w-[60%] h-[70%] bg-cover bg-center rotate-[-6deg] rounded-[3rem] shadow-2xl blur-[2px] opacity-70" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1585829365295-ab7cd400c167?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              
+              {/* Media Online (Digital/News Portals) */}
+              <div className="absolute top-[5%] -right-[10%] w-[65%] h-[60%] bg-cover bg-center rotate-[4deg] rounded-[3rem] shadow-2xl blur-[1px] opacity-80" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              
+              {/* Media Sosial (Apps/Phones) */}
+              <div className="absolute -bottom-[15%] left-[20%] w-[70%] h-[65%] bg-cover bg-center rotate-[-3deg] rounded-[3rem] shadow-2xl blur-[2px] opacity-70" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              
+              {/* Gradient Overlay untuk menghaluskan transisi tepi gambar ke background gelap */}
+              <div className="absolute inset-0 bg-gradient-to-b from-slate-950/40 via-transparent to-slate-950/80"></div>
+              <div className="absolute inset-0 bg-gradient-to-r from-slate-950/60 via-transparent to-slate-950/60"></div>
+            </div>
+            
+            {/* CSS Grid Overlay untuk Kesan Radar/Monitoring Sistem */}
+            <div className="absolute inset-0 bg-[linear-gradient(rgba(6,182,212,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(6,182,212,0.05)_1px,transparent_1px)] bg-[size:40px_40px] pointer-events-none"></div>
+
+            <div className="absolute top-[-10%] left-[-10%] w-[600px] h-[600px] bg-blue-700/30 rounded-full blur-[150px] pointer-events-none"></div>
+            <div className="absolute bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-cyan-600/20 rounded-full blur-[120px] pointer-events-none"></div>
+
+            <div className="max-w-md w-full bg-slate-900/80 backdrop-blur-2xl border border-slate-700/70 rounded-3xl shadow-[0_0_50px_rgba(6,182,212,0.15)] overflow-hidden animate-in fade-in zoom-in-95 duration-500 z-10">
+              <div className="p-8 text-center border-b border-slate-700/70 relative overflow-hidden">
+                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-cyan-500 to-transparent opacity-50"></div>
+                
+                <div className="mx-auto bg-slate-800/80 w-20 h-20 rounded-2xl flex items-center justify-center mb-5 ring-1 ring-cyan-500/50 shadow-[0_0_20px_rgba(6,182,212,0.2)] transform rotate-3">
+                  <Cpu size={40} className="text-cyan-400 -rotate-3" />
+                </div>
+                <h2 className="text-3xl font-extrabold tracking-tight text-white drop-shadow-md">
+                  MediaAnalytics<span className="text-cyan-400">.AI</span>
+                </h2>
+                <p className="text-slate-400 text-xs mt-3 font-semibold tracking-[0.2em] uppercase">
+                  Aplikasi Pembuat Analisis Isu Otomatis
+                </p>
+                
+                <div className="mt-8 inline-block px-6 py-1.5 bg-slate-800/50 rounded-full border border-slate-700">
+                  <h3 className="text-lg font-bold text-cyan-300 tracking-[0.3em] uppercase">
+                    {authView === 'login' ? 'LOGIN' : authView === 'signup' ? 'SIGN UP' : 'RESET SANDI'}
+                  </h3>
+                </div>
+              </div>
+              
+              <div className="p-8">
+                {authMessage.text && (
+                  <div className={`p-4 rounded-xl mb-6 text-sm flex items-start gap-3 backdrop-blur-md border ${authMessage.type === 'error' ? 'bg-red-500/10 text-red-400 border-red-500/30' : 'bg-green-500/10 text-green-400 border-green-500/30'}`}>
+                    {authMessage.type === 'error' ? <AlertTriangle size={18} className="shrink-0 mt-0.5" /> : <CheckCircle size={18} className="shrink-0 mt-0.5" />}
+                    <span className="font-medium leading-relaxed">{authMessage.text}</span>
+                  </div>
+                )}
+
+                {authView === 'login' && (
+                  <form onSubmit={handleLogin} className="space-y-5">
+                    <div className="space-y-4">
+                      <div className="relative group">
+                        <Mail className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                        <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="admin@instansi.go.id" />
+                      </div>
+                      <div className="relative group">
+                        <Lock className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                        <input type="password" name="password" required value={authForm.password} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="••••••••" />
+                      </div>
+                    </div>
+                    <div className="flex justify-end">
+                      <button type="button" onClick={() => setAuthView('forgot')} className="text-xs font-medium text-cyan-400 hover:text-cyan-300 hover:underline transition-colors">Lupa kata sandi?</button>
+                    </div>
+                    <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-sm tracking-wider uppercase py-4 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.4)] hover:shadow-[0_0_25px_rgba(6,182,212,0.6)] transition-all flex justify-center items-center mt-2">
+                      {authLoading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> : 'Masuk Ke Sistem'}
+                    </button>
+                    <div className="text-center mt-6 pt-6 border-t border-slate-800">
+                      <p className="text-sm text-slate-400">
+                        Belum punya akses? <button type="button" onClick={() => setAuthView('signup')} className="text-cyan-400 font-bold hover:text-cyan-300 transition-colors">Sign Up</button>
+                      </p>
+                    </div>
+                  </form>
+                )}
+
+                {authView === 'signup' && (
+                  <form onSubmit={handleSignup} className="space-y-5">
+                    <div className="space-y-4">
+                      <div className="relative group">
+                        <Mail className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                        <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="email@anda.com" />
+                      </div>
+                      <div className="relative group">
+                        <Lock className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                        <input type="password" name="password" required minLength="6" value={authForm.password} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="Kata Sandi (Min. 6 Karakter)" />
+                      </div>
+                      <div className="relative group">
+                        <Key className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                        <input type="text" name="accessCode" required value={authForm.accessCode} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="Kode Akses Spesial" />
+                      </div>
+                    </div>
+                    <div className="mt-2 p-4 bg-cyan-950/30 rounded-xl border border-cyan-900/50 flex items-start gap-3">
+                      <UserPlus size={18} className="text-cyan-400 mt-0.5 shrink-0" />
+                      <p className="text-xs text-cyan-100/70 font-medium leading-relaxed">
+                        Kode akses divalidasi dengan aman melalui server backend. <a href="https://wa.me/6287838960454?text=Halo%20Admin,%20saya%20ingin%20meminta%20kode%20akses%20untuk%20registrasi%20akun%20baru%20di%20Aplikasi%20MediaAnalytics.AI" target="_blank" rel="noopener noreferrer" className="text-cyan-400 font-bold hover:text-cyan-300 underline block mt-1">Hubungi Admin via WhatsApp</a>
+                      </p>
+                    </div>
+                    <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-sm tracking-wider uppercase py-4 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all flex justify-center items-center mt-4">
+                      {authLoading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> : 'Daftar Akun'}
+                    </button>
+                    <div className="text-center mt-6 pt-6 border-t border-slate-800">
+                      <button type="button" onClick={() => setAuthView('login')} className="text-sm text-cyan-400 font-bold hover:text-cyan-300 transition-colors">Kembali ke LOGIN</button>
+                    </div>
+                  </form>
+                )}
+
+                {authView === 'forgot' && (
+                  <form onSubmit={handleResetPassword} className="space-y-5">
+                    <p className="text-sm text-slate-400 leading-relaxed text-center mb-6">Masukkan email terdaftar. Sistem akan mengirimkan tautan enkripsi untuk mereset sandi Anda.</p>
+                    <div className="relative group">
+                      <Mail className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
+                      <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 focus:border-cyan-500 outline-none transition-all" placeholder="email@anda.com" />
+                    </div>
+                    <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white font-bold text-sm tracking-wider uppercase py-4 rounded-xl shadow-[0_0_15px_rgba(6,182,212,0.4)] transition-all flex justify-center items-center mt-2">
+                      {authLoading ? <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> : 'Kirim Tautan Reset'}
+                    </button>
+                    <div className="text-center mt-6 pt-6 border-t border-slate-800">
+                      <button type="button" onClick={() => setAuthView('login')} className="text-sm text-cyan-400 font-bold hover:text-cyan-300 transition-colors">Kembali ke LOGIN</button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      }
+
+      // --- RENDER APLIKASI UTAMA (JIKA SUDAH LOGIN) ---
+      return (
+        <div className="min-h-screen bg-slate-950 font-sans text-slate-200 selection:bg-cyan-500/30 selection:text-white pb-12">
+          <div className="fixed top-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-900/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
+          <div className="fixed bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-cyan-900/10 rounded-full blur-[100px] pointer-events-none z-0"></div>
+
+          <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 shadow-lg shadow-black/20">
+            <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <div className="bg-slate-800 p-2.5 rounded-xl border border-slate-700 shadow-[0_0_10px_rgba(6,182,212,0.15)] ring-1 ring-cyan-500/30">
+                  <Cpu size={24} className="text-cyan-400" />
+                </div>
+                <div>
+                  <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-sm">MediaAnalytics<span className="text-cyan-400">.AI</span></h1>
+                  <p className="text-[10px] text-cyan-300/70 font-bold tracking-widest uppercase mt-0.5">Aplikasi Pembuat Analisis Isu Otomatis</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-5">
+                 <div className="text-right hidden sm:block">
+                    <p className="text-sm font-semibold text-slate-300 truncate max-w-[150px]">{user.email}</p>
+                    <p className="text-[10px] text-green-400 uppercase tracking-[0.2em] font-bold">Private Workspace Aktif</p>
+                 </div>
+                 <button onClick={handleLogout} className="bg-slate-800 hover:bg-red-900/80 text-slate-300 hover:text-red-300 p-2.5 rounded-xl transition-all shadow-sm border border-slate-700 hover:border-red-500/50 hover:shadow-[0_0_15px_rgba(239,68,68,0.2)] flex items-center gap-2 group" title="Keluar">
+                    <LogOut size={16} className="group-hover:scale-110 transition-transform" />
+                    <span className="text-xs font-bold hidden md:block">LOGOUT</span>
+                 </button>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-6xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
+            
+            {/* BANNER ERROR FIREBASE (Menyala jika Rules belum diperbarui) */}
+            <div className="lg:col-span-12">
+              {dbWarning && (
+                <div className="bg-orange-950/50 border border-orange-500/50 text-orange-200 p-4 rounded-2xl text-sm flex items-start gap-4 backdrop-blur-md shadow-lg animate-in fade-in slide-in-from-top-4">
+                  <AlertTriangle size={24} className="shrink-0 text-orange-400 mt-0.5" />
+                  <div>
+                    <p className="font-bold text-base mb-1 text-orange-400">Peringatan: Database Belum Terkoneksi Penuh</p>
+                    <p className="leading-relaxed opacity-90">{dbWarning}</p>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="lg:col-span-5 space-y-6 print:hidden">
+              <div className="bg-slate-900/60 backdrop-blur-sm p-6 rounded-2xl shadow-xl border border-slate-800 relative overflow-hidden">
+                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 to-cyan-400"></div>
+
+                <h2 className="text-lg font-bold mb-6 flex items-center gap-3 text-white uppercase tracking-wider text-sm">
+                  <div className="bg-slate-800 p-1.5 rounded-md"><FileText size={18} className="text-cyan-400"/></div> 
+                  Parameter Input Data
+                </h2>
+                
+                <div className="space-y-5">
+                  <div className="space-y-3">
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest">Data Dasar</label>
+                    <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full p-3 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 focus:ring-2 focus:ring-cyan-500/50 outline-none transition-all color-scheme-dark"/>
+                    <input type="text" name="title" placeholder="Judul Isu / Headline Berita..." value={formData.title} onChange={handleInputChange} className="w-full p-3 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 outline-none transition-all"/>
+                  </div>
+                  
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2">Tautan Referensi (Opsional)</label>
+                    <div className="relative">
+                      <LinkIcon className="absolute left-3 top-3.5 text-slate-500" size={16} />
+                      <input 
+                        type="url" 
+                        name="sourceUrl" 
+                        placeholder="https://news.com/berita-terkini" 
+                        value={formData.sourceUrl} 
+                        onChange={handleInputChange} 
+                        className="w-full pl-10 pr-3 py-3 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 outline-none transition-all text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-400 uppercase tracking-widest mb-2 flex justify-between">
+                      <span>Corpus / Narasi Berita</span>
+                      <span className="text-[10px] text-cyan-500/70">{formData.content.trim() ? formData.content.trim().split(/\s+/).length : 0} KATA</span>
+                    </label>
+                    <textarea name="content" rows="10" placeholder="Salin & tempel keseluruhan badan berita di sini untuk akurasi analisis AI..." value={formData.content} onChange={handleInputChange} className="w-full p-4 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 outline-none text-sm transition-all leading-relaxed resize-y"></textarea>
+                  </div>
+
+                  {errorMsg && (
+                    <div className="p-3 bg-red-900/30 text-red-300 border border-red-800/50 rounded-xl text-sm flex items-start gap-3 backdrop-blur-sm">
+                      <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                      <span>{errorMsg}</span>
+                    </div>
+                  )}
+
+                  <div className="flex gap-3">
+                    <button onClick={generateAnalysis} disabled={isAnalyzing} className="flex-1 bg-gradient-to-r from-blue-700 to-cyan-600 hover:from-blue-600 hover:to-cyan-500 text-white font-bold tracking-widest text-sm py-4 rounded-xl shadow-[0_0_20px_rgba(6,182,212,0.3)] hover:shadow-[0_0_30px_rgba(6,182,212,0.5)] transition-all flex items-center justify-center gap-3 uppercase relative overflow-hidden group disabled:opacity-70 disabled:cursor-not-allowed">
+                      <div className="absolute inset-0 w-full h-full bg-white/20 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-700 skew-x-12"></div>
+                      {isAnalyzing ? (
+                        <><div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div> Menganalisis...</>
+                      ) : (
+                        <><Cpu size={18}/> Analytics</>
+                      )}
+                    </button>
+                    <button onClick={handleReset} disabled={isAnalyzing} className="px-6 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-sm rounded-xl border border-slate-700 transition-all flex items-center justify-center disabled:opacity-50" title="Bersihkan Form Data">
+                      RESET
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="lg:col-span-7">
+              {result && !isAnalyzing ? (
+                <div className="bg-slate-900/60 backdrop-blur-sm rounded-2xl shadow-xl border border-slate-800 overflow-hidden animate-in fade-in slide-in-from-bottom-4 duration-700 flex flex-col h-full">
+                  <div className="bg-slate-800/80 border-b border-slate-700 p-4 flex flex-wrap justify-between items-center print:hidden gap-3 relative">
+                    <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-400"></div>
+                    <h3 className="font-bold text-white uppercase text-xs tracking-[0.2em] ml-2">Terminal Output AI</h3>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={() => copyToClipboard(getFormattedText(), 'all')} className="px-4 py-2 text-xs bg-slate-800 border border-slate-600 rounded-lg hover:bg-slate-700 flex items-center gap-2 transition-colors text-slate-300 font-bold tracking-wider">
+                        {copiedSection === 'all' ? <CheckCircle size={14} className="text-green-400"/> : <Copy size={14} className="text-cyan-400"/>} SALIN DATA
+                      </button>
+                      <button onClick={downloadWord} className="px-4 py-2 text-xs font-bold tracking-wider bg-cyan-600/20 border border-cyan-500/50 text-cyan-300 rounded-lg hover:bg-cyan-600/40 flex items-center gap-2 transition-all shadow-[0_0_10px_rgba(6,182,212,0.1)]">
+                        <FileOutput size={14}/> EXPORT (.DOC)
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="p-8 space-y-10 overflow-y-auto custom-scrollbar">
+                    <div className="border-b border-slate-800 pb-6">
+                      <h2 className="text-2xl font-bold text-white leading-tight mb-3 drop-shadow-md">{formData.title}</h2>
+                      <div className="flex flex-wrap items-center gap-5 text-xs text-slate-400 font-semibold tracking-widest uppercase">
+                        <span className="flex items-center gap-1.5"><Calendar size={14} className="text-blue-400"/> {formData.date}</span>
+                        {result.sourceUrl && (
+                          <a 
+                            href={result.sourceUrl} 
+                            target="_blank" 
+                            rel="noopener noreferrer" 
+                            className="flex items-center gap-1.5 text-cyan-400 hover:text-cyan-300 hover:underline transition-colors"
+                          >
+                            <ExternalLink size={14}/> Verifikasi Sumber
+                          </a>
+                        )}
+                      </div>
+                    </div>
+
+                    <section className="relative group">
+                      <div className="absolute -left-4 top-0 bottom-0 w-1 bg-blue-500 rounded-r-md opacity-50 group-hover:opacity-100 group-hover:shadow-[0_0_10px_#3b82f6] transition-all"></div>
+                      <h4 className="text-xs font-black text-slate-300 uppercase mb-3 tracking-[0.2em] flex items-center gap-2">
+                        <span className="text-blue-500">01 //</span> Resume Berita
+                      </h4>
+                      
+                      <div className="bg-slate-800/40 p-6 rounded-xl border border-slate-700/50 backdrop-blur-sm shadow-inner">
+                        <p className="text-slate-300 text-sm leading-relaxed text-justify">{result.resume}</p>
+                      </div>
+                    </section>
+
+                    <section className="relative group">
+                      <div className="absolute -left-4 top-0 bottom-0 w-1 bg-amber-500 rounded-r-md opacity-50 group-hover:opacity-100 group-hover:shadow-[0_0_10px_#f59e0b] transition-all"></div>
+                      <h4 className="text-xs font-black text-slate-300 uppercase mb-3 tracking-[0.2em] flex items-center gap-2">
+                        <span className="text-amber-500">02 //</span> Analisis SWOT
+                      </h4>
+                      
+                      <div className="space-y-4">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {/* Strengths */}
+                          <div className="bg-emerald-950/20 p-5 rounded-xl border border-emerald-900/30 backdrop-blur-sm hover:border-emerald-500/50 transition-colors">
+                            <h5 className="text-emerald-400 font-bold mb-4 uppercase text-[10px] tracking-widest flex items-center gap-2">S - Kekuatan (Strengths)</h5>
+                            <ul className="list-none space-y-3">
+                              {(result.swot_kekuatan || []).map((item, idx) => {
+                                const parts = item.split(':');
+                                const hasDesc = parts.length > 1;
+                                return (
+                                  <li key={idx} className="text-slate-300 text-[13px] leading-relaxed pl-4 relative">
+                                    <span className="absolute left-0 top-0 text-emerald-400">•</span>
+                                    {hasDesc ? <><strong className="text-emerald-300">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                          
+                          {/* Weaknesses */}
+                          <div className="bg-orange-950/20 p-5 rounded-xl border border-orange-900/30 backdrop-blur-sm hover:border-orange-500/50 transition-colors">
+                            <h5 className="text-orange-400 font-bold mb-4 uppercase text-[10px] tracking-widest flex items-center gap-2">W - Kelemahan (Weaknesses)</h5>
+                            <ul className="list-none space-y-3">
+                              {(result.swot_kelemahan || []).map((item, idx) => {
+                                const parts = item.split(':');
+                                const hasDesc = parts.length > 1;
+                                return (
+                                  <li key={idx} className="text-slate-300 text-[13px] leading-relaxed pl-4 relative">
+                                    <span className="absolute left-0 top-0 text-orange-400">•</span>
+                                    {hasDesc ? <><strong className="text-orange-300">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+
+                          {/* Opportunities */}
+                          <div className="bg-blue-950/20 p-5 rounded-xl border border-blue-900/30 backdrop-blur-sm hover:border-blue-500/50 transition-colors">
+                            <h5 className="text-blue-400 font-bold mb-4 uppercase text-[10px] tracking-widest flex items-center gap-2">O - Peluang (Opportunities)</h5>
+                            <ul className="list-none space-y-3">
+                              {(result.swot_peluang || []).map((item, idx) => {
+                                const parts = item.split(':');
+                                const hasDesc = parts.length > 1;
+                                return (
+                                  <li key={idx} className="text-slate-300 text-[13px] leading-relaxed pl-4 relative">
+                                    <span className="absolute left-0 top-0 text-blue-400">•</span>
+                                    {hasDesc ? <><strong className="text-blue-300">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+
+                          {/* Threats */}
+                          <div className="bg-red-950/20 p-5 rounded-xl border border-red-900/30 backdrop-blur-sm hover:border-red-500/50 transition-colors">
+                            <h5 className="text-red-400 font-bold mb-4 uppercase text-[10px] tracking-widest flex items-center gap-2">T - Ancaman (Threats)</h5>
+                            <ul className="list-none space-y-3">
+                              {(result.swot_ancaman || []).map((item, idx) => {
+                                const parts = item.split(':');
+                                const hasDesc = parts.length > 1;
+                                return (
+                                  <li key={idx} className="text-slate-300 text-[13px] leading-relaxed pl-4 relative">
+                                    <span className="absolute left-0 top-0 text-red-400">•</span>
+                                    {hasDesc ? <><strong className="text-red-300">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        </div>
+                      </div>
+                    </section>
+
+                    <section className="relative group">
+                      <div className="absolute -left-4 top-0 bottom-0 w-1 bg-green-500 rounded-r-md opacity-50 group-hover:opacity-100 group-hover:shadow-[0_0_10px_#22c55e] transition-all"></div>
+                      <h4 className="text-xs font-black text-slate-300 uppercase mb-3 tracking-[0.2em] flex items-center gap-2">
+                        <span className="text-green-500">03 //</span> Rekomendasi Kebijakan
+                      </h4>
+                      <ul className="space-y-3 bg-slate-800/30 p-6 rounded-xl text-sm border border-slate-700/50 backdrop-blur-sm shadow-inner">
+                        {(result.kebijakan || []).map((item, idx) => {
+                          const parts = item.split(':');
+                          const hasDesc = parts.length > 1;
+                          return (
+                            <li key={idx} className="flex gap-3 text-slate-300 leading-relaxed items-start">
+                              <span className="text-green-500 font-mono text-xs mt-0.5 opacity-80 shrink-0">[{String(idx + 1).padStart(2, '0')}]</span>
+                              <span>{hasDesc ? <><strong className="text-green-400">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+
+                    <section className="relative group">
+                      <div className="absolute -left-4 top-0 bottom-0 w-1 bg-purple-500 rounded-r-md opacity-50 group-hover:opacity-100 group-hover:shadow-[0_0_10px_#a855f7] transition-all"></div>
+                      <h4 className="text-xs font-black text-slate-300 uppercase mb-3 tracking-[0.2em] flex items-center gap-2">
+                        <span className="text-purple-500">04 //</span> Strategi Komunikasi <Megaphone size={14} className="text-purple-500 ml-1"/>
+                      </h4>
+                      <ul className="space-y-3 bg-slate-800/30 p-6 rounded-xl text-sm border border-slate-700/50 backdrop-blur-sm shadow-inner">
+                        {(result.strategi_komunikasi || []).map((item, idx) => {
+                          const parts = item.split(':');
+                          const hasDesc = parts.length > 1;
+                          return (
+                            <li key={idx} className="flex gap-3 text-slate-300 leading-relaxed items-start">
+                               <span className="text-purple-500 font-mono text-xs mt-0.5 opacity-80 shrink-0">[{String(idx + 1).padStart(2, '0')}]</span>
+                               <span>{hasDesc ? <><strong className="text-purple-400">{parts[0]}:</strong> {parts.slice(1).join(':')}</> : item}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </section>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full min-h-[500px] flex flex-col items-center justify-center text-slate-500 p-12 border border-dashed border-slate-700 rounded-2xl bg-slate-900/30 backdrop-blur-sm relative overflow-hidden z-0">
+                  <div className="absolute inset-0 bg-gradient-to-b from-transparent via-cyan-900/5 to-transparent pointer-events-none"></div>
+                  
+                  <div className="relative w-56 h-56 md:w-64 md:h-64 flex items-center justify-center mb-10">
+                    <div className={`absolute inset-0 border-2 border-cyan-500/20 rounded-full border-dashed ${isAnalyzing ? 'animate-[spin_3s_linear_infinite]' : 'animate-[spin_15s_linear_infinite]'}`}></div>
+                    <div className={`absolute inset-4 border-2 border-blue-500/20 rounded-full border-dotted ${isAnalyzing ? 'animate-[spin_4s_linear_infinite_reverse]' : 'animate-[spin_20s_linear_infinite_reverse]'}`}></div>
+                    <div className={`absolute inset-10 border border-purple-500/20 rounded-full ${isAnalyzing ? 'animate-ping opacity-40 duration-700' : 'animate-pulse opacity-20'}`}></div>
+
+                    <div className="absolute top-1/2 left-1/2 w-full h-[1px] bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent -translate-x-1/2 -translate-y-1/2 rotate-45"></div>
+                    <div className="absolute top-1/2 left-1/2 w-full h-[1px] bg-gradient-to-r from-transparent via-cyan-500/20 to-transparent -translate-x-1/2 -translate-y-1/2 -rotate-45"></div>
+
+                    <div className={`absolute top-0 -translate-y-1/2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 shadow-lg transition-colors ${isAnalyzing ? 'text-cyan-400 animate-bounce shadow-cyan-500/20' : 'text-slate-600'}`}>
+                      <FileText size={20} />
+                    </div>
+                    <div className={`absolute bottom-0 translate-y-1/2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 shadow-lg transition-colors ${isAnalyzing ? 'text-purple-400 animate-bounce shadow-purple-500/20' : 'text-slate-600'}`} style={{ animationDelay: '200ms' }}>
+                      <Megaphone size={20} />
+                    </div>
+                    <div className={`absolute left-0 -translate-x-1/2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 shadow-lg transition-colors ${isAnalyzing ? 'text-blue-400 animate-bounce shadow-blue-500/20' : 'text-slate-600'}`} style={{ animationDelay: '400ms' }}>
+                      <Globe size={20} />
+                    </div>
+                    <div className={`absolute right-0 translate-x-1/2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 shadow-lg transition-colors ${isAnalyzing ? 'text-green-400 animate-bounce shadow-green-500/20' : 'text-slate-600'}`} style={{ animationDelay: '600ms' }}>
+                      <BarChart2 size={20} />
+                    </div>
+
+                    <div className={`relative z-10 bg-slate-900 p-5 rounded-full border transition-all duration-500 flex items-center justify-center overflow-hidden ${isAnalyzing ? 'border-cyan-400 shadow-[0_0_40px_rgba(6,182,212,0.5)] scale-110' : 'border-cyan-900/50 shadow-[0_0_20px_rgba(6,182,212,0.1)]'}`}>
+                      {isAnalyzing && <div className="absolute inset-0 bg-cyan-500/20 animate-pulse"></div>}
+                      <Cpu size={48} className={isAnalyzing ? 'text-cyan-300 animate-pulse drop-shadow-[0_0_10px_rgba(6,182,212,0.8)]' : 'text-cyan-800'} />
+                    </div>
+                  </div>
+
+                  <div className="text-center z-10">
+                    <p className="text-sm font-bold tracking-[0.2em] uppercase text-cyan-400 mb-3 drop-shadow-sm">
+                      {isAnalyzing ? 'MEMPROSES DATA MEDIA...' : 'SISTEM MENUNGGU INPUT'}
+                    </p>
+                    <p className="text-xs text-slate-400 max-w-sm leading-relaxed mx-auto font-medium">
+                      {isAnalyzing 
+                        ? 'AI sedang mengekstraksi konteks, menganalisis sentimen, dan merumuskan strategi rekomendasi...' 
+                        : 'Silakan masukkan judul dan narasi berita pada panel kiri untuk mengeksekusi analisis media secara otomatis.'}
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </main>
+        </div>
+      );
+    };
+
+    // Melakukan render komponen App ke dalam div id="root"
+    const root = createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
