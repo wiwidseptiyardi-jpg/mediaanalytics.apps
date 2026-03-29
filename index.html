@@ -389,10 +389,10 @@ Struktur JSON WAJIB:
           // DETEKSI LINGKUNGAN YANG KETAT
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
-          // DAFTAR MODEL FALLBACK OTOMATIS: Disederhanakan untuk menghindari konflik
+          // DAFTAR MODEL FALLBACK OTOMATIS
           const modelsToTry = isCanvasEnv 
               ? ["gemini-2.5-flash-preview-09-2025"] 
-              : ["gemini-1.5-flash", "gemini-1.5-pro"];
+              : ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.5-flash-8b"];
 
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
@@ -417,8 +417,9 @@ Struktur JSON WAJIB:
           for (const model of modelsToTry) {
              try {
                 const cleanModel = model.trim();
-                // Menggunakan endpoint API versi v1 (Stabil) bukan lagi v1beta
-                const endpointUrl = `https://generativelanguage.googleapis.com/v1/models/${cleanModel}:generateContent?key=${apiKey}`;
+                // KEMBALI MENGGUNAKAN v1beta: Ini adalah kunci penyelesaian Error 400!
+                // Endpoint v1 biasa menolak fitur JSON Schema dan SystemInstruction.
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${cleanModel}:generateContent?key=${apiKey}`;
                 
                 data = await fetchWithRetry(endpointUrl, {
                     method: 'POST',
@@ -431,8 +432,8 @@ Struktur JSON WAJIB:
              } catch (err) {
                 lastFetchError = err;
                 console.warn(`Sistem Beralih: Model [${model}] gagal merespon (${err.status}). Mencoba rute model lain...`);
-                // Hentikan pencarian seketika jika ternyata kunci API-nya yang salah (400 atau 403)
-                if (err.status === 400 || err.status === 401 || err.status === 403) {
+                // Hentikan pencarian jika masalahnya murni API Key yang salah atau ditolak (Bukan karena Schema)
+                if (err.status === 401 || err.status === 403) {
                     break;
                 }
              }
@@ -484,15 +485,15 @@ Struktur JSON WAJIB:
           
           // PENAMPILAN ERROR DETAIL DARI GOOGLE
           if (error.status === 401 || error.status === 403) {
-            setErrorMsg(`Akses Ditolak (${error.status}): API Key mungkin salah atau tidak valid. Respon Google: ${errMsg.substring(0, 100)}`);
+            setErrorMsg(`Akses Ditolak (${error.status}): API Key mungkin salah atau kuota habis. Respon: ${errMsg.substring(0, 100)}`);
           } else if (error.status === 404) {
             setErrorMsg(`Model Tidak Ditemukan (${error.status}): Respon Google: ${errMsg.substring(0, 120)}`);
           } else if (error.status === 400) {
-            setErrorMsg(`Format Salah (${error.status}): Mungkin masalah pada API Key atau Payload. Respon Google: ${errMsg.substring(0, 120)}`);
+            setErrorMsg(`Format Salah (${error.status}): Payload JSON ditolak server. Respon Google: ${errMsg.substring(0, 120)}`);
           } else if (error.status === 429) {
             setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
           } else {
-            setErrorMsg(`Gagal (${error.status || 'Network'}): ${errMsg.substring(0, 120)}`);
+            setErrorMsg(`Gagal (${error.status || 'Network'}): Pastikan Anda terhubung internet. Detail: ${errMsg.substring(0, 120)}`);
           }
           
           // Memperlama waktu tampil error agar mudah dibaca pengguna
