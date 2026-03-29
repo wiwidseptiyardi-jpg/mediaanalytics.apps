@@ -341,14 +341,17 @@ Struktur JSON WAJIB:
           }
         };
 
+        // PAYLOAD UNTUK GEMINI 1.0 PRO (Model Universal - Kebal Error 400 & 404)
+        const payload10 = {
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n[INSTRUKSI WAJIB: OUTPUT HARUS DALAM FORMAT JSON SAJA TANPA TEKS LAIN]\n\nJudul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }]
+        };
+
         try {
           let apiKey = "";
-          let modelName = "";
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
-            modelName = "gemini-2.5-flash-preview-09-2025";
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
             const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
@@ -367,31 +370,66 @@ Struktur JSON WAJIB:
             }
             
             apiKey = cleanedKey;
-            modelName = "gemini-1.5-flash"; // Model utama
           }
 
-          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-          
-          const response = await fetch(endpointUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload15)
-          });
+          // DAFTAR MODEL "ULTIMATE FALLBACK"
+          const modelsToTry = isCanvasEnv 
+              ? [ { name: "gemini-2.5-flash-preview-09-2025", payload: payload15 } ] 
+              : [ 
+                  { name: "gemini-1.5-flash", payload: payload15 },
+                  { name: "gemini-1.5-flash-latest", payload: payload15 },
+                  { name: "gemini-pro", payload: payload10 } 
+                ];
 
-          if (!response.ok) {
-             let errorDetail = await response.text();
+          let data = null;
+          let isSuccess = false;
+          let lastFetchError = null;
+
+          // SISTEM LOOP PINTAR
+          for (const modelDef of modelsToTry) {
              try {
-                const jsonObj = JSON.parse(errorDetail);
-                if (jsonObj.error && jsonObj.error.message) {
-                   errorDetail = jsonObj.error.message;
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelDef.name}:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(endpointUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(modelDef.payload)
+                });
+
+                if (!response.ok) {
+                   let errorDetail = await response.text();
+                   try {
+                      const jsonObj = JSON.parse(errorDetail);
+                      if (jsonObj.error && jsonObj.error.message) {
+                         errorDetail = jsonObj.error.message;
+                      }
+                   } catch(e) {}
+                   const err = new Error(`[Status ${response.status}] - ${errorDetail}`);
+                   err.status = response.status;
+                   throw err;
                 }
-             } catch(e) {}
-             throw new Error(`[Status ${response.status}] - ${errorDetail}`);
+                
+                data = await response.json();
+                isSuccess = true;
+                console.log("Berhasil menggunakan model:", modelDef.name);
+                break; // Keluar dari loop pencarian jika sukses!
+             } catch (err) {
+                lastFetchError = err;
+                console.warn(`Sistem Beralih: Model [${modelDef.name}] ditolak (${err.status}). Pindah ke model selanjutnya...`);
+                
+                // Break hanya jika kuota habis (429) atau API Key tidak sah (401/403)
+                if (err.status === 401 || err.status === 403 || err.status === 429) {
+                    break;
+                }
+             }
+          }
+
+          // Jika semua model gagal
+          if (!isSuccess) {
+             throw lastFetchError;
           }
           
-          const data = await response.json();
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          
           if (!textResponse) throw new Error("Respons AI kosong");
           
           let parsedData;
@@ -430,13 +468,20 @@ Struktur JSON WAJIB:
           console.error("ANALYSIS ERROR:", error);
           const errMsg = error.message || "Terjadi kesalahan yang tidak diketahui.";
           
+          // DETEKSI PENYAKIT GOOGLE APPS SCRIPT CACHE
+          const partialKey = apiKey ? apiKey.substring(0, 10) : "Kosong";
+          
           if (error.message.includes("Status 404")) {
-             setErrorMsg(`Error (404): Proyek Google Cloud Anda belum mengaktifkan 'Generative Language API'. Cari API tersebut di Google Cloud Console dan klik 'Enable'.`);
+             setErrorMsg(`Error 404: Kunci API yang sedang ditarik Vercel berawalan "${partialKey}...". Cek di Google Cloud, apakah kunci aslinya sama? Jika BEDA, Anda LUPA melakukan Deploy -> "Versi Baru" di Apps Script!`);
+          } else if (error.status === 401 || error.status === 403) {
+            setErrorMsg(`Akses Ditolak (${error.status}): Kunci API tidak valid. Kunci yang dibaca Vercel: "${partialKey}...". Lakukan Deploy Versi Baru di GS!`);
+          } else if (error.status === 429) {
+            setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
           } else {
-             setErrorMsg(`GAGAL: ${errMsg}`);
+            setErrorMsg(`GAGAL: ${errMsg}`);
           }
           
-          setTimeout(() => setErrorMsg(null), 25000); 
+          setTimeout(() => setErrorMsg(null), 30000); // Tampil 30 detik
         } finally {
           setIsAnalyzing(false);
         }
