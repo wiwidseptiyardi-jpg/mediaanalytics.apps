@@ -319,7 +319,7 @@ Struktur JSON WAJIB:
 - "kebijakan": array of string (WAJIB ADA! Berikan 3-8 poin rekomendasi kebijakan/tindak lanjut operasional oleh pemerintah atau pemangku kepentingan untuk merespon isu secara nyata. SANGAT SPESIFIK dan dapat langsung dieksekusi. Format tiap string: 'Nama Aksi/Program: Uraian detail langkah eksekusinya').
 - "strategi_komunikasi": array of string (WAJIB ADA! Berikan 3-8 poin strategi komunikasi publik atau narasi kunci oleh pemerintah untuk merespon isu. Format tiap string: 'Taktik Komunikasi: Uraian detail pesan atau eksekusinya').`;
 
-        // PAYLOAD UNTUK GEMINI 1.5 (Model Baru dengan Fitur Schema)
+        // 1. PAYLOAD UNTUK GEMINI 1.5 (Model Baru dengan Fitur Schema - Sangat Akurat)
         const payload15 = {
           contents: [{ parts: [{ text: `Judul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }],
           systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -341,55 +341,93 @@ Struktur JSON WAJIB:
           }
         };
 
+        // 2. PAYLOAD UNTUK GEMINI 1.0 PRO (Model Universal - Kebal Error 400 & 404)
+        // Sengaja tidak menggunakan systemInstruction/responseSchema karena API model lama tidak mendukungnya.
+        const payload10 = {
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n[INSTRUKSI WAJIB: OUTPUT HARUS DALAM FORMAT JSON SAJA TANPA TEKS LAIN]\n\nJudul Isu: ${formData.title}\n\nIsi Berita/Narasi: ${formData.content}` }] }]
+        };
+
         try {
           let apiKey = "";
-          let modelName = "";
           const isCanvasEnv = typeof __app_id !== 'undefined';
 
           if (isCanvasEnv) {
             apiKey = ""; // Sandbox Proxy Mode
-            modelName = "gemini-2.5-flash-preview-09-2025";
           } else {
             // LINGKUNGAN VERCEL / PRODUCTION
             const cleanedKey = geminiApiKey ? geminiApiKey.replace(/[^A-Za-z0-9_\-]/g, "") : "";
-            
             if (!cleanedKey || !cleanedKey.startsWith("AIza")) {
               setErrorMsg("Gagal: API Key Gemini kosong. Pastikan Anda telah menempelkan kunci terbaru di Google Script, lalu 'Terapkan' (Deploy) ulang sebagai 'Versi Baru'.");
               setIsAnalyzing(false);
               return; 
             }
             apiKey = cleanedKey;
-            modelName = "gemini-1.5-flash"; // Model produksi paling stabil
           }
 
-          // MENGGUNAKAN JALUR v1beta (WAJIB UNTUK SYSTEM INSTRUCTION)
-          const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-          
-          const response = await fetch(endpointUrl, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload15)
-          });
+          // DAFTAR MODEL "ULTIMATE FALLBACK": 
+          // Coba dari yang terbaik (1.5 Flash), jika 404/Error, langsung pindah ke model universal (Pro 1.0)
+          const modelsToTry = isCanvasEnv 
+              ? [ { name: "gemini-2.5-flash-preview-09-2025", payload: payload15 } ] 
+              : [ 
+                  { name: "gemini-1.5-flash", payload: payload15 },
+                  { name: "gemini-1.5-flash-latest", payload: payload15 },
+                  { name: "gemini-pro", payload: payload10 } // Model pamungkas (selalu ada di tiap project)
+                ];
 
-          // JIKA SERVER GOOGLE MENOLAK (MENANGKAP PESAN ERROR ASLI)
-          if (!response.ok) {
-             let errorDetail = await response.text();
+          let data = null;
+          let isSuccess = false;
+          let lastFetchError = null;
+
+          // SISTEM LOOP PINTAR UNTUK MENCARI MODEL YANG TERSEDIA DI KUNCI API ANDA
+          for (const modelDef of modelsToTry) {
              try {
-                const jsonObj = JSON.parse(errorDetail);
-                if (jsonObj.error && jsonObj.error.message) {
-                   errorDetail = jsonObj.error.message;
+                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelDef.name}:generateContent?key=${apiKey}`;
+                
+                const response = await fetch(endpointUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(modelDef.payload)
+                });
+
+                if (!response.ok) {
+                   let errorDetail = await response.text();
+                   try {
+                      const jsonObj = JSON.parse(errorDetail);
+                      if (jsonObj.error && jsonObj.error.message) {
+                         errorDetail = jsonObj.error.message;
+                      }
+                   } catch(e) {}
+                   const err = new Error(`[Status ${response.status}] - ${errorDetail}`);
+                   err.status = response.status;
+                   throw err;
                 }
-             } catch(e) {}
-             throw new Error(`[Status ${response.status}] - ${errorDetail}`);
+                
+                data = await response.json();
+                isSuccess = true;
+                console.log("Berhasil menggunakan model:", modelDef.name);
+                break; // Keluar dari loop pencarian jika sukses!
+             } catch (err) {
+                lastFetchError = err;
+                console.warn(`Sistem Beralih: Model [${modelDef.name}] ditolak (${err.status}). Pindah ke model selanjutnya...`);
+                // Break hanya jika API Key Anda mati atau tidak valid (401/403). 
+                // Jika error 404 (model tidak ditemukan) atau 400 (skema tidak didukung), biarkan loop mencoba model gemini-pro!
+                if (err.status === 401 || err.status === 403 || err.status === 429) {
+                    break;
+                }
+             }
+          }
+
+          // Jika semua model gagal (API Key benar-benar bermasalah)
+          if (!isSuccess) {
+             throw lastFetchError;
           }
           
-          const data = await response.json();
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          
           if (!textResponse) throw new Error("Respons AI kosong");
           
           let parsedData;
           try {
+            // Mampu menangani output JSON bersih dari 1.5 maupun JSON Markdown dari model 1.0
             const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
             const cleanJson = jsonMatch ? jsonMatch[0] : textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
             parsedData = JSON.parse(cleanJson);
@@ -422,9 +460,18 @@ Struktur JSON WAJIB:
 
         } catch (error) {
           console.error("ANALYSIS ERROR:", error);
-          // MENAMPILKAN ERROR ASLI MENTAH-MENTAH AGAR BISA DIDETEKSI
-          setErrorMsg(`GAGAL: ${error.message}`);
-          setTimeout(() => setErrorMsg(null), 25000); // Tampil 25 detik agar sempat dibaca/di-screenshot
+          const errMsg = error.message || "Terjadi kesalahan yang tidak diketahui.";
+          
+          // PENAMPILAN ERROR DETAIL
+          if (error.status === 401 || error.status === 403) {
+            setErrorMsg(`Akses Ditolak (${error.status}): Kunci API tidak valid. Hasilkan Kunci API baru di aistudio.google.com!`);
+          } else if (error.status === 429) {
+            setErrorMsg("Sistem sedang melayani banyak antrean (Error 429). Mohon tunggu beberapa detik dan coba lagi.");
+          } else {
+            setErrorMsg(`GAGAL: ${errMsg}`);
+          }
+          
+          setTimeout(() => setErrorMsg(null), 25000); 
         } finally {
           setIsAnalyzing(false);
         }
