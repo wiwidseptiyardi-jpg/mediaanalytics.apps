@@ -299,6 +299,7 @@
             return await response.json();
           } catch (error) {
             lastError = error;
+            // Jika error adalah 429 (Quota Exceeded), kita lempar langsung tanpa retry lama agar pesan langsung muncul
             if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) throw error; 
             if (i === retries - 1) throw error;
             await new Promise(res => setTimeout(res, delays[i]));
@@ -361,9 +362,8 @@ Struktur JSON: {
                         
                         if (availableModels.length > 0) {
                             if (availableModels.includes('gemini-1.5-flash')) finalTargetModel = 'gemini-1.5-flash';
+                            else if (availableModels.includes('gemini-2.5-flash')) finalTargetModel = 'gemini-2.5-flash';
                             else if (availableModels.includes('gemini-1.5-pro')) finalTargetModel = 'gemini-1.5-pro';
-                            else if (availableModels.includes('gemini-pro')) finalTargetModel = 'gemini-pro';
-                            else if (availableModels.includes('gemini-1.0-pro')) finalTargetModel = 'gemini-1.0-pro';
                             else finalTargetModel = availableModels[0]; 
                         }
                     }
@@ -394,7 +394,7 @@ Struktur JSON: {
             const cleanJson = jsonMatch ? jsonMatch[0] : textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
             parsedData = JSON.parse(cleanJson);
           } catch (parseErr) {
-            throw new Error("Format JSON Gagal.");
+            throw new Error("Format JSON Gagal. AI tidak merespon dalam format yang diminta.");
           }
           
           const kebijakanArr = parsedData.kebijakan || [];
@@ -430,8 +430,14 @@ Struktur JSON: {
           }
 
         } catch (error) {
-          setErrorMsg(`GAGAL: ${error.message.toUpperCase() || "MASALAH SERVER"}`);
-          setTimeout(() => setErrorMsg(null), 10000); 
+          // PENANGANAN ERROR LEBIH RAPI (Menangani 429 Quota Exceeded)
+          const errMsg = error.message ? error.message.toUpperCase() : "MASALAH SERVER";
+          if (error.status === 429 || errMsg.includes("QUOTA") || errMsg.includes("EXCEEDED")) {
+            setErrorMsg("MOHON MAAF SERVER AI SEDANG SIBUK, SILAHKAN COBA KEMBALI 5-10 MENIT LAGI");
+          } else {
+            setErrorMsg(`GAGAL: ${errMsg}`);
+          }
+          setTimeout(() => setErrorMsg(null), 12000); 
         } finally {
           setIsAnalyzing(false); 
         }
