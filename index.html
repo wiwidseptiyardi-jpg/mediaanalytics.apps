@@ -32,8 +32,6 @@
     .custom-scrollbar::-webkit-scrollbar { width: 5px; }
     .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
     .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #1e293b; border-radius: 10px; }
-    /* Menghaluskan tampilan placeholder */
-    ::placeholder { font-size: 11px; opacity: 0.7; }
   </style>
 
   <!-- Peta Impor (Import Map) untuk memuat library React & Firebase langsung dari CDN -->
@@ -50,9 +48,8 @@
     }
   </script>
 
-  <!-- Babel Standalone & Library Pembuat PDF -->
+  <!-- Babel Standalone untuk menerjemahkan sintaks JSX di dalam browser -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 </head>
 <body>
   <div id="root"></div>
@@ -64,14 +61,12 @@
     import { 
       FileText, Calendar, Cpu, Copy, CheckCircle, 
       AlertTriangle, ExternalLink, Megaphone, FileOutput, LogOut, 
-      Star, ArrowRightCircle, Mail, Lock, Key, UserPlus, Link as LinkIcon,
-      Download, ChevronDown, Save, History, Trash2, FolderOpen, ArrowLeft,
-      Globe, BarChart2, X
+      Star, ArrowRightCircle, Mail, Lock, Key, UserPlus, Link as LinkIcon
     } from 'lucide-react';
 
     import { initializeApp } from 'firebase/app';
     import { getAuth, signInWithEmailAndPassword, createUserWithEmailAndPassword, sendPasswordResetEmail, onAuthStateChanged, signOut } from 'firebase/auth';
-    import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection, addDoc, query, orderBy, getDocs, deleteDoc } from 'firebase/firestore';
+    import { getFirestore, doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 
     // =========================================================================
     // KONFIGURASI FIREBASE
@@ -90,27 +85,23 @@
     const db = getFirestore(app);
 
     const App = () => {
-      // --- STATE UTAMA ---
+      // --- STATE OTENTIKASI & PENGGUNA ---
       const [user, setUser] = useState(null);
       const [userData, setUserData] = useState(null); 
       const [authView, setAuthView] = useState('login'); 
       const [authForm, setAuthForm] = useState({ email: '', password: '', accessCode: '' });
       const [authLoading, setAuthLoading] = useState(false);
       const [authMessage, setAuthMessage] = useState({ type: '', text: '' });
+      
       const [geminiApiKey, setGeminiApiKey] = useState("");
       const [isSystemInit, setIsSystemInit] = useState(false);
+
+      // --- STATE UPGRADE PREMIUM (MODAL) ---
       const [showUpgradeModal, setShowUpgradeModal] = useState(false);
       const [modalMode, setModalMode] = useState('buy'); 
       const [upgradeCode, setUpgradeCode] = useState('');
       const [upgradeLoading, setUpgradeLoading] = useState(false);
       const [upgradeMsg, setUpgradeMsg] = useState({ type: '', text: '' });
-      const [showDownloadMenu, setShowDownloadMenu] = useState(false);
-      const [viewMode, setViewMode] = useState('dashboard'); 
-      const [savedAnalyses, setSavedAnalyses] = useState([]);
-      const [isSaving, setIsSaving] = useState(false);
-      const [saveSuccessMsg, setSaveSuccessMsg] = useState('');
-      const [historyLoading, setHistoryLoading] = useState(false);
-      const [itemToDelete, setItemToDelete] = useState(null); 
 
       const SCRIPT_URL = "https://script.google.com/macros/s/AKfycbxxpvPkfPM88Xs5J2cJL6r112PKrahH6f0eTUJrc8ArJrjfzyY7sqdjnK-Zbm0vGvdF0A/exec";
 
@@ -153,65 +144,43 @@
         };
         fetchGeminiKey();
 
-        let unsubscribeSnapshot = null;
-        const unsubscribeAuth = onAuthStateChanged(auth, async (currentUser) => {
+        const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
           setUser(currentUser);
           if (currentUser) {
-            unsubscribeSnapshot = onSnapshot(doc(db, 'users', currentUser.uid), (docSnap) => {
-              if (docSnap.exists()) {
-                setUserData(docSnap.data());
+            try {
+              const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+              if (userDoc.exists()) {
+                setUserData(userDoc.data());
               }
-            }, (error) => {
-              console.error("Gagal mendengarkan profil pengguna:", error);
-            });
+            } catch (e) {}
           } else {
             setUserData(null);
-            setViewMode('dashboard');
-            if (unsubscribeSnapshot) unsubscribeSnapshot();
           }
           setIsSystemInit(true); 
         });
-
-        return () => {
-          unsubscribeAuth();
-          if (unsubscribeSnapshot) unsubscribeSnapshot();
-        };
+        return () => unsubscribe();
       }, []);
 
       const handleGuestLogin = async (e) => {
         e.preventDefault();
         setAuthLoading(true);
         setAuthMessage({ type: '', text: '' });
-
-        const guestEmail = authForm.email.toLowerCase().trim();
-        const previousGuestEmail = localStorage.getItem('guestEmailUsed');
-        
-        if (previousGuestEmail && previousGuestEmail !== guestEmail) {
-          setAuthMessage({ 
-            type: 'error', 
-            text: `Anda sudah mencoba dengan email tamu (${previousGuestEmail}). Jika ingin mencoba sepuasnya bisa memakai akun premium. Terimakasih` 
-          });
-          setAuthLoading(false);
-          return;
-        }
-
         const guestPassword = "GuestMedia2026!Secure"; 
         try {
-          await signInWithEmailAndPassword(auth, guestEmail, guestPassword);
-          localStorage.setItem('guestEmailUsed', guestEmail);
+          await signInWithEmailAndPassword(auth, authForm.email, guestPassword);
         } catch (error) {
           if (error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
             try {
-              const userCredential = await createUserWithEmailAndPassword(auth, guestEmail, guestPassword);
+              const userCredential = await createUserWithEmailAndPassword(auth, authForm.email, guestPassword);
               const newUserData = {
                 email: userCredential.user.email,
                 uid: userCredential.user.uid,
                 role: 'guest',
-                tokens: 1, 
+                tokens: 2, 
                 registeredAt: new Date().toISOString()
               };
               await setDoc(doc(db, 'users', userCredential.user.uid), newUserData);
-              localStorage.setItem('guestEmailUsed', guestEmail);
+              setUserData(newUserData);
               try {
                 await fetch(SCRIPT_URL, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newUserData) });
               } catch (e) {}
@@ -256,6 +225,7 @@
             registeredAt: new Date().toISOString()
           };
           await setDoc(doc(db, 'users', userCredential.user.uid), newUserData);
+          setUserData(newUserData);
         } catch (error) {
           setAuthMessage({ type: 'error', text: 'PENDAFTARAN GAGAL: ' + error.message.toUpperCase() });
         } finally { setAuthLoading(false); }
@@ -266,10 +236,7 @@
         setAuthLoading(true);
         try {
           await sendPasswordResetEmail(auth, authForm.email);
-          setAuthMessage({ 
-            type: 'success', 
-            text: 'Tautan reset password telah dikirim ke email Anda. Silakan cek Inbox/Spam.' 
-          });
+          setAuthMessage({ type: 'success', text: 'TAUTAN RESET TERKIRIM.' });
         } catch (error) {
           setAuthMessage({ type: 'error', text: 'GAGAL MENGIRIM TAUTAN.' });
         } finally {
@@ -296,6 +263,7 @@
             return;
           }
           await updateDoc(doc(db, 'users', user.uid), { role: 'premium', tokens: 'unlimited' });
+          setUserData(prev => ({ ...prev, role: 'premium', tokens: 'unlimited' }));
           setUpgradeMsg({ type: 'success', text: 'AKUN PREMIUM DIAKTIFKAN!' });
           setTimeout(() => setShowUpgradeModal(false), 2000);
         } catch (error) { setUpgradeMsg({ type: 'error', text: 'KESALAHAN SISTEM.' }); }
@@ -308,90 +276,9 @@
         setErrorMsg(null);
       };
 
-      // --- RIWAYAT & PENYIMPANAN ---
-      const handleSaveAnalysis = async () => {
-        if (!user || !result) return;
-        if (userData?.role !== 'premium' && userData?.tokens !== 'unlimited') {
-          openUpgradeModal();
-          return;
-        }
-        setIsSaving(true);
-        try {
-          const historyRef = collection(db, 'users', user.uid, 'scriptHistory');
-          const q = query(historyRef);
-          const querySnapshot = await getDocs(q);
-          if (querySnapshot.size >= 10) {
-            setErrorMsg('Batas penyimpanan tercapai (Maksimal 10 project). Silakan hapus riwayat lama.');
-            setIsSaving(false);
-            return;
-          }
-          const analysisData = {
-            title: formData.title,
-            date: formData.date,
-            sourceUrl: formData.sourceUrl,
-            content: formData.content,
-            result: result,
-            savedAt: new Date().toISOString(),
-            timestamp: Date.now()
-          };
-          await addDoc(historyRef, analysisData);
-          setSaveSuccessMsg('Berhasil disimpan ke Riwayat!');
-          setTimeout(() => setSaveSuccessMsg(''), 3000);
-        } catch (error) {
-          setErrorMsg('Gagal menyimpan analisis ke Cloud.');
-          setTimeout(() => setErrorMsg(null), 3000);
-        } finally {
-          setIsSaving(false);
-        }
-      };
-
-      const loadSavedAnalyses = async () => {
-        if (!user) return;
-        setHistoryLoading(true);
-        try {
-          const q = query(collection(db, 'users', user.uid, 'scriptHistory'), orderBy('timestamp', 'desc'));
-          const querySnapshot = await getDocs(q);
-          const items = [];
-          querySnapshot.forEach((doc) => {
-            items.push({ id: doc.id, ...doc.data() });
-          });
-          setSavedAnalyses(items);
-        } catch (error) { console.error("Error history:", error); }
-        finally { setHistoryLoading(false); }
-      };
-
-      const confirmDelete = (id) => {
-        setItemToDelete(id);
-      };
-
-      const executeDelete = async () => {
-        if (!user || !itemToDelete) return;
-        try {
-          await deleteDoc(doc(db, 'users', user.uid, 'scriptHistory', itemToDelete));
-          setSavedAnalyses(prev => prev.filter(item => item.id !== itemToDelete));
-        } catch (error) { 
-          console.error("Delete failed:", error); 
-        } finally {
-          setItemToDelete(null);
-        }
-      };
-
-      const handleOpenAnalysis = (item) => {
-        setFormData({
-          title: item.title || '',
-          date: item.date || new Date().toISOString().split('T')[0],
-          sourceUrl: item.sourceUrl || '',
-          content: item.content || ''
-        });
-        setResult(item.result);
-        setViewMode('dashboard');
-      };
-
-      useEffect(() => {
-        if (viewMode === 'history' && user) { loadSavedAnalyses(); }
-      }, [viewMode, user]);
-
-      // --- AI ANALYSIS ---
+      // =========================================================================
+      // FUNGSI FETCH WITH RETRY
+      // =========================================================================
       const fetchWithRetry = async (url, options, retries = 3) => {
         const delays = [1000, 2000, 4000];
         let lastError = null;
@@ -412,6 +299,7 @@
             return await response.json();
           } catch (error) {
             lastError = error;
+            // Jika error adalah 429 (Quota Exceeded), kita lempar langsung tanpa retry lama agar pesan langsung muncul
             if (error.status && error.status >= 400 && error.status < 500 && error.status !== 429) throw error; 
             if (i === retries - 1) throw error;
             await new Promise(res => setTimeout(res, delays[i]));
@@ -423,97 +311,136 @@
       const generateAnalysis = async () => {
         if (userData?.role === 'guest' && userData?.tokens <= 0) { openUpgradeModal(); return; }
         if (!formData.title || !formData.content) { setErrorMsg("ISI DATA TERLEBIH DAHULU."); return; }
+        
         setIsAnalyzing(true);
         setErrorMsg(null);
         
-        const systemPrompt = `Analis Media & Kebijakan Publik profesional. Bedah berita mendalam. EYD Bahasa Indonesia baik (tidak kapital semua). Output JSON: {"resume": "string", "analisis_deskriptif": "string", "swot_kekuatan": ["string"], "swot_kelemahan": ["string"], "swot_peluang": ["string"], "swot_ancaman": ["string"], "kebijakan": ["string"], "strategi_komunikasi": ["string"], "rekomendasi_publikasi": ["string"], "kesimpulan": "string"}`;
+        const systemPrompt = `Anda adalah Analis Media dan Kebijakan Publik profesional. 
+Tugas Anda adalah membedah berita dengan analisis mendalam dan komprehensif.
+WAJIB: Tulis dalam Bahasa Indonesia EYD yang baik dan benar (bukan huruf kapital semua).
+WAJIB: Berikan output HANYA dalam format JSON murni tanpa teks pembuka atau markdown tags.
+Struktur JSON: {
+  "resume": "string", 
+  "analisis_deskriptif": "string",
+  "swot_kekuatan": ["string"], 
+  "swot_kelemahan": ["string"], 
+  "swot_peluang": ["string"], 
+  "swot_ancaman": ["string"], 
+  "kebijakan": ["string"], 
+  "strategi_komunikasi": ["string"],
+  "rekomendasi_publikasi": ["string"],
+  "kesimpulan": "string"
+}`;
 
         try {
           let apiKey = geminiApiKey ? geminiApiKey.trim().replace(/[^A-Za-z0-9_\-]/g, "") : "";
+          let finalTargetModel = "gemini-1.5-flash"; 
           const isCanvasEnv = typeof __app_id !== 'undefined';
           let data = null;
 
           if (isCanvasEnv) {
             apiKey = ""; 
-            const finalTargetModel = "gemini-2.5-flash-preview-09-2025";
+            finalTargetModel = "gemini-2.5-flash-preview-09-2025";
             const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${finalTargetModel}:generateContent?key=${apiKey}`;
             data = await fetchWithRetry(endpointUrl, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }] })
+                body: JSON.stringify({ contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA BERITA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }] })
             });
           } else {
-            if (!apiKey) throw new Error("API Key Gemini tidak terbaca.");
-            
-            // PERBAIKAN: SMART FALLBACK LOOP UNTUK MENCEGAH 404 MODEL NOT FOUND DI VERCEL
-            const modelsToTry = [
-              "gemini-1.5-flash",
-              "gemini-1.5-flash-latest",
-              "gemini-1.5-pro",
-              "gemini-1.0-pro",
-              "gemini-pro"
-            ];
+            if (!apiKey) throw new Error("API Key Gemini tidak terbaca. Refresh halaman atau cek Google Apps Script.");
 
-            let isSuccess = false;
-            let lastFetchError = null;
-
-            for (const modelName of modelsToTry) {
-              try {
-                const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${apiKey}`;
-                data = await fetchWithRetry(endpointUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }] })
-                });
-                isSuccess = true;
-                break; // Keluar dari loop jika berhasil
-              } catch (err) {
-                lastFetchError = err;
-                console.warn(`Fallback: Model ${modelName} gagal, mencoba rute lain...`);
-                // Jika masalahnya Auth (401/403) atau Kuota Habis (429), tidak usah coba model lain
-                if (err.status === 401 || err.status === 403 || err.status === 429) break; 
-              }
+            // 1. TANYA GOOGLE: MENGGUNAKAN SISTEM AUTO-SCANNER 
+            try {
+                const modelsRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+                if (modelsRes.ok) {
+                    const modelsData = await modelsRes.json();
+                    if (modelsData.models) {
+                        const availableModels = modelsData.models
+                            .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+                            .map(m => m.name.replace('models/', ''));
+                        
+                        if (availableModels.length > 0) {
+                            if (availableModels.includes('gemini-1.5-flash')) finalTargetModel = 'gemini-1.5-flash';
+                            else if (availableModels.includes('gemini-2.5-flash')) finalTargetModel = 'gemini-2.5-flash';
+                            else if (availableModels.includes('gemini-1.5-pro')) finalTargetModel = 'gemini-1.5-pro';
+                            else finalTargetModel = availableModels[0]; 
+                        }
+                    }
+                }
+            } catch (scannerErr) {
+                 console.warn("Scanner model gagal jaringan, menggunakan fallback default.");
             }
 
-            if (!isSuccess) {
-              throw lastFetchError; // Lempar error terakhir jika semua model gagal
-            }
+            // 2. EKSEKUSI PEMROSESAN AI DENGAN MODEL YANG SUDAH PASTI ADA
+            const endpointUrl = `https://generativelanguage.googleapis.com/v1beta/models/${finalTargetModel}:generateContent?key=${apiKey}`;
+            const safePayload = {
+              contents: [{ parts: [{ text: `${systemPrompt}\n\nDATA BERITA:\nJudul: ${formData.title}\n\nIsi: ${formData.content}` }] }]
+            };
+
+            data = await fetchWithRetry(endpointUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(safePayload)
+            });
           }
           
           let textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
-          const parsedData = JSON.parse(jsonMatch ? jsonMatch[0] : textResponse);
+          if (!textResponse) throw new Error("Respons Kosong");
           
-          const parseToStringArray = (arr) => arr ? arr.map(String) : ["-"];
+          let parsedData;
+          try {
+            const jsonMatch = textResponse.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0] : textResponse.replace(/```json/g, '').replace(/```/g, '').trim();
+            parsedData = JSON.parse(cleanJson);
+          } catch (parseErr) {
+            throw new Error("Format JSON Gagal. AI tidak merespon dalam format yang diminta.");
+          }
+          
+          const kebijakanArr = parsedData.kebijakan || [];
+          const komunikasiArr = parsedData.strategi_komunikasi || [];
+          const publikasiArr = parsedData.rekomendasi_publikasi || [];
+
+          const parseToStringArray = (arr) => arr.map(item => {
+            if (typeof item === 'object' && item !== null) {
+              const values = Object.values(item);
+              return values.length > 1 ? `${values[0]}: ${values.slice(1).join(' ')}` : String(values[0]);
+            }
+            return String(item);
+          });
 
           setResult({
-            resume: String(parsedData.resume),
-            analisis_deskriptif: String(parsedData.analisis_deskriptif),
-            swot_kekuatan: parseToStringArray(parsedData.swot_kekuatan),
-            swot_kelemahan: parseToStringArray(parsedData.swot_kelemahan),
-            swot_peluang: parseToStringArray(parsedData.swot_peluang),
-            swot_ancaman: parseToStringArray(parsedData.swot_ancaman),
-            kebijakan: parseToStringArray(parsedData.kebijakan),
-            strategi_komunikasi: parseToStringArray(parsedData.strategi_komunikasi),
-            rekomendasi_publikasi: parseToStringArray(parsedData.rekomendasi_publikasi),
-            kesimpulan: String(parsedData.kesimpulan),
+            resume: typeof parsedData.resume === 'string' ? parsedData.resume : "Tidak tersedia.",
+            analisis_deskriptif: typeof parsedData.analisis_deskriptif === 'string' ? parsedData.analisis_deskriptif : "Tidak tersedia.",
+            swot_kekuatan: Array.isArray(parsedData.swot_kekuatan) ? parseToStringArray(parsedData.swot_kekuatan) : ["-"],
+            swot_kelemahan: Array.isArray(parsedData.swot_kelemahan) ? parseToStringArray(parsedData.swot_kelemahan) : ["-"],
+            swot_peluang: Array.isArray(parsedData.swot_peluang) ? parseToStringArray(parsedData.swot_peluang) : ["-"],
+            swot_ancaman: Array.isArray(parsedData.swot_ancaman) ? parseToStringArray(parsedData.swot_ancaman) : ["-"],
+            kebijakan: Array.isArray(kebijakanArr) && kebijakanArr.length > 0 ? parseToStringArray(kebijakanArr) : ["-"],
+            strategi_komunikasi: Array.isArray(komunikasiArr) && komunikasiArr.length > 0 ? parseToStringArray(komunikasiArr) : ["-"],
+            rekomendasi_publikasi: Array.isArray(publikasiArr) && publikasiArr.length > 0 ? parseToStringArray(publikasiArr) : ["-"],
+            kesimpulan: typeof parsedData.kesimpulan === 'string' ? parsedData.kesimpulan : "Tidak tersedia.",
             sourceUrl: formData.sourceUrl
           });
 
           if (userData?.role === 'guest' && userData.tokens > 0) {
-            await updateDoc(doc(db, 'users', user.uid), { tokens: userData.tokens - 1 });
+            const newTokens = userData.tokens - 1;
+            await updateDoc(doc(db, 'users', user.uid), { tokens: newTokens });
+            setUserData(prev => ({ ...prev, tokens: newTokens }));
           }
+
         } catch (error) {
-          const errMsg = error.message ? error.message.toUpperCase() : "SERVER SIBUK";
+          // PENANGANAN ERROR LEBIH RAPI (Menangani 429 Quota Exceeded)
+          const errMsg = error.message ? error.message.toUpperCase() : "MASALAH SERVER";
           if (error.status === 429 || errMsg.includes("QUOTA") || errMsg.includes("EXCEEDED")) {
-             setErrorMsg("MOHON MAAF SERVER AI SEDANG SIBUK, SILAHKAN COBA KEMBALI 5-10 MENIT LAGI");
-          } else if (errMsg.includes("NOT FOUND")) {
-             setErrorMsg("GAGAL: MODEL AI TIDAK DITEMUKAN. PASTIKAN API KEY MEMILIKI AKSES.");
+            setErrorMsg("MOHON MAAF SERVER AI SEDANG SIBUK, SILAHKAN COBA KEMBALI 5-10 MENIT LAGI");
           } else {
-             setErrorMsg(`GAGAL: ${errMsg}`);
+            setErrorMsg(`GAGAL: ${errMsg}`);
           }
           setTimeout(() => setErrorMsg(null), 12000); 
-        } finally { setIsAnalyzing(false); }
+        } finally {
+          setIsAnalyzing(false); 
+        }
       };
 
       const copyToClipboard = (text, sectionName) => {
@@ -525,43 +452,33 @@
       const getFormattedText = () => {
         if (!result) return '';
         const formatList = (arr) => (arr || []).map(i => `- ${i}`).join('\n');
-        return `MediaAnalytics.AI - ${formData.title}\n\n1. RESUME BERITA:\n${result.resume}\n\n2. ANALISIS SWOT:\n[S]\n${formatList(result.swot_kekuatan)}\n\n[W]\n${formatList(result.swot_kelemahan)}\n\n[O]\n${formatList(result.swot_peluang)}\n\n[T]\n${formatList(result.swot_ancaman)}\n\n4. REKOMENDASI:\n${formatList(result.kebijakan)}\n\n5. KESIMPULAN:\n${result.kesimpulan}`;
+        return `MediaAnalytics.AI - ${formData.title}\n\n1. RESUME BERITA:\n${result.resume}\n\n2. ANALISIS DESKRIPTIF:\n${result.analisis_deskriptif}\n\n3. ANALISIS SWOT:\n[KEKUATAN]\n${formatList(result.swot_kekuatan)}\n\n[KELEMAHAN]\n${formatList(result.swot_kelemahan)}\n\n[PELUANG]\n${formatList(result.swot_peluang)}\n\n[ANCAMAN]\n${formatList(result.swot_ancaman)}\n\n4. REKOMENDASI KEBIJAKAN:\n${formatList(result.kebijakan)}\n\n5. STRATEGI KOMUNIKASI:\n${formatList(result.strategi_komunikasi)}\n\n6. REKOMENDASI PUBLIKASI:\n${formatList(result.rekomendasi_publikasi)}\n\n7. KESIMPULAN:\n${result.kesimpulan}`;
       };
 
       const downloadWord = () => {
         const formatListHtml = (arr) => `<ul>${(arr || []).map(i => `<li>${i}</li>`).join('')}</ul>`;
-        const content = `<html><body><h2>${formData.title}</h2><p><em>${formData.date}</em></p><h3>1. Resume</h3><p>${result.resume}</p><h3>2. SWOT</h3>${formatListHtml(result.swot_kekuatan)}</body></html>`;
+        const content = `<html><head><meta charset="utf-8"><style>body{font-family: Arial, sans-serif; line-height: 1.6;} h2{color: #1e3a8a;} h3{color: #0f172a; margin-top: 20px;} h4{color: #334155;}</style></head><body>
+          <h2>${formData.title}</h2>
+          <p><em>Tanggal: ${formData.date}</em></p>
+          <hr/>
+          <h3>1. Resume Berita</h3><p>${result.resume}</p>
+          <h3>2. Analisis Deskriptif</h3><p>${result.analisis_deskriptif}</p>
+          <h3>3. Analisis SWOT</h3>
+          <h4>Strengths (Kekuatan)</h4>${formatListHtml(result.swot_kekuatan)}
+          <h4>Weaknesses (Kelemahan)</h4>${formatListHtml(result.swot_kelemahan)}
+          <h4>Opportunities (Peluang)</h4>${formatListHtml(result.swot_peluang)}
+          <h4>Threats (Ancaman)</h4>${formatListHtml(result.swot_ancaman)}
+          <h3>4. Rekomendasi Kebijakan</h3>${formatListHtml(result.kebijakan)}
+          <h3>5. Strategi Komunikasi</h3>${formatListHtml(result.strategi_komunikasi)}
+          <h3>6. Rekomendasi Publikasi</h3>${formatListHtml(result.rekomendasi_publikasi)}
+          <h3>7. Kesimpulan</h3><p>${result.kesimpulan}</p>
+          </body></html>`;
+        const blob = new Blob([content], { type: 'application/msword' });
+        const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = URL.createObjectURL(new Blob([content], { type: 'application/msword' }));
-        link.download = `Analisis_${formData.date}.doc`;
+        link.href = url;
+        link.download = `Analisis_Media_${formData.date}.doc`;
         link.click();
-      };
-
-      const downloadPDF = () => {
-        const element = document.createElement('div');
-        element.innerHTML = `<div style="padding:20px; font-family:Arial;"><h2>${formData.title}</h2><p>${formData.date}</p><hr/><p>${result.resume}</p></div>`;
-        window.html2pdf().from(element).save(`Analisis_${formData.date}.pdf`);
-      };
-
-      const renderDeleteModal = () => {
-        if (!itemToDelete) return null;
-        return (
-          <div className="fixed inset-0 z-[100] bg-slate-950/90 backdrop-blur-md flex items-center justify-center p-4">
-            <div className="bg-[#111827] border border-slate-700/50 rounded-3xl w-full max-w-sm overflow-hidden shadow-2xl flex flex-col relative animate-in zoom-in-95">
-              <div className="p-6 text-center">
-                <div className="w-16 h-16 bg-red-500/20 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
-                  <Trash2 size={32} />
-                </div>
-                <h3 className="text-xl font-black text-white uppercase tracking-widest mb-2">Hapus Riwayat?</h3>
-                <p className="text-slate-400 text-sm font-medium leading-relaxed">Tindakan ini tidak dapat dibatalkan. Riwayat analisis ini akan dihapus secara permanen.</p>
-              </div>
-              <div className="flex border-t border-slate-700/50">
-                <button onClick={() => setItemToDelete(null)} className="flex-1 py-4 text-slate-300 font-bold hover:bg-slate-800 transition-colors uppercase tracking-widest text-xs">Batal</button>
-                <button onClick={executeDelete} className="flex-1 py-4 text-red-400 font-black hover:bg-red-900/40 transition-colors uppercase tracking-widest text-xs border-l border-slate-700/50">Ya, Hapus</button>
-              </div>
-            </div>
-          </div>
-        );
       };
 
       const renderUpgradeModal = () => {
@@ -571,7 +488,7 @@
             <div className="bg-[#111827] border border-slate-700/50 rounded-[40px] w-full max-w-[380px] overflow-hidden shadow-2xl flex flex-col relative animate-in zoom-in-95">
               <div className="bg-gradient-to-r from-[#8b5cf6] to-[#3b82f6] pt-8 pb-6 px-4 text-center relative">
                 <button onClick={() => setShowUpgradeModal(false)} className="absolute top-5 right-5 text-white/70 hover:text-white transition-colors">
-                  <X size={24} />
+                  <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
                 </button>
                 <h2 className="text-2xl font-black text-white tracking-wider uppercase">UPGRADE PREMIUM</h2>
                 <p className="text-white/90 text-xs mt-1 font-bold">Akses Tanpa Batas & Riwayat Cloud</p>
@@ -582,9 +499,9 @@
                     <div className="bg-[#1f2937] border border-slate-700/30 rounded-3xl p-8 text-center w-full mb-8 shadow-inner">
                       <p className="text-sm font-bold text-slate-300 mb-2 uppercase tracking-widest">Dapatkan Kode Akses</p>
                       <p className="text-4xl font-black text-[#22c55e] mb-4">Rp 25.000</p>
-                      <p className="text-[10px] text-slate-400 leading-relaxed font-semibold uppercase tracking-tighter text-center">Beli kode akses premium melalui Admin untuk menggunakan aplikasi sepuasnya.</p>
+                      <p className="text-[10px] text-slate-400 leading-relaxed font-semibold uppercase tracking-tighter">Beli kode akses premium melalui Admin untuk menggunakan aplikasi sepuasnya.</p>
                     </div>
-                    <a href="https://wa.me/6287838960454?text=Halo%20Admin,%20saya%20ingin%20membeli%20Kode%20Akses%20Premium%20MediaAnalytics.AI%20seharga%20Rp25.000." target="_blank" rel="noopener noreferrer" className="w-full bg-[#22c55e] hover:bg-[#16a34a] text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-lg text-center block mb-6">HUBUNGI ADMIN</a>
+                    <a href="https://wa.me/6287838960454?text=Halo%20Admin,%20saya%20ingin%20membeli%20kode%20akses%20Premium." target="_blank" rel="noopener noreferrer" className="w-full bg-[#22c55e] hover:bg-[#16a34a] text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-lg text-center block mb-6">HUBUNGI ADMIN</a>
                     <button type="button" onClick={() => user ? setModalMode('input') : setAuthView('signup')} className="text-[10px] font-black text-slate-400 hover:text-cyan-400 uppercase underline underline-offset-8 tracking-widest transition-colors">{user ? "SUDAH DAPAT KODE? MASUKKAN DI SINI" : "SUDAH DAPAT KODE? DAFTAR DI SINI"}</button>
                   </>
                 ) : (
@@ -606,114 +523,77 @@
 
       if (!isSystemInit) {
         return (
-          <div className="min-h-screen bg-[#020617] flex items-center justify-center">
-            <Cpu size={48} className="text-cyan-400 animate-pulse" />
+          <div className="min-h-screen bg-[#020617] flex items-center justify-center relative overflow-hidden">
+            <Cpu size={48} className="text-cyan-400 animate-pulse relative z-10" />
           </div>
         );
       }
 
+      // =========================================================================
+      // RENDER HALAMAN AUTENTIKASI 
+      // =========================================================================
       if (!user) {
         return (
-          <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4 relative font-sans overflow-hidden">
+          <div className="min-h-screen bg-[#020617] flex flex-col items-center justify-center p-4 relative font-sans">
             {renderUpgradeModal()}
-            <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-[0.2] filter grayscale">
-              <div className="absolute top-0 left-0 w-full h-full bg-[url('https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80')] bg-cover opacity-30"></div>
+            <div className="absolute inset-0 overflow-hidden pointer-events-none opacity-[0.25] mix-blend-screen filter grayscale-[30%]">
+              <div className="absolute -top-[15%] -left-[5%] w-[60%] h-[70%] bg-cover bg-center rotate-[-6deg] rounded-[3rem] shadow-2xl blur-[3px]" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1585829365295-ab7cd400c167?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              <div className="absolute top-[5%] -right-[10%] w-[65%] h-[60%] bg-cover bg-center rotate-[4deg] rounded-[3rem] shadow-2xl blur-[2px]" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1504711434969-e33886168f5c?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              <div className="absolute -bottom-[15%] left-[20%] w-[70%] h-[65%] bg-cover bg-center rotate-[-3deg] rounded-[3rem] shadow-2xl blur-[4px]" style={{ backgroundImage: `url('https://images.unsplash.com/photo-1611162617474-5b21e879e113?q=80&w=1000&auto=format&fit=crop')` }}></div>
+              <div className="absolute inset-0 bg-gradient-to-b from-[#020617] via-transparent to-[#020617]"></div>
             </div>
 
-            <div className="w-full max-w-[420px] bg-[#111827]/90 backdrop-blur-xl border border-slate-800 rounded-[50px] p-10 z-10 shadow-2xl flex flex-col items-center animate-in fade-in zoom-in-95 duration-500">
-              <div className="w-16 h-16 rounded-full bg-slate-900 border border-cyan-900/50 flex items-center justify-center mb-6 shadow-cyan-500/10 shadow-xl"><FileText size={28} className="text-cyan-400" /></div>
-              <h1 className="text-4xl font-black text-white tracking-tighter mb-1">MediaAnalytics<span className="text-cyan-500">.AI</span></h1>
-              <p className="text-[10px] text-slate-500 font-bold tracking-[0.2em] mb-12 text-center leading-relaxed">Aplikasi Pembuat Analisis Isu Otomatis</p>
+            <div className="w-full max-w-[420px] bg-[#111827] border border-slate-800 rounded-[50px] p-10 z-10 shadow-[0_0_80px_rgba(0,0,0,0.8)] flex flex-col items-center animate-in fade-in zoom-in-95 duration-500">
+              <div className="w-16 h-16 rounded-full bg-[#0d1321] border border-cyan-900/50 flex items-center justify-center mb-6 shadow-[0_0_20px_rgba(6,182,212,0.15)]"><FileText size={28} className="text-cyan-400" /></div>
+              <h1 className="text-4xl font-black text-white tracking-tighter mb-1 uppercase">MediaAnalytics<span className="text-cyan-500">.AI</span></h1>
+              <p className="text-[10px] text-slate-500 font-bold tracking-[0.2em] uppercase mb-12 text-center leading-relaxed">Aplikasi Pembuat Analisis Isu Otomatis</p>
 
-              {authMessage.text && authView !== 'forgot' && (
-                <div className={`w-full p-4 rounded-2xl mb-6 text-[11px] font-black border flex items-start gap-3 ${authMessage.type === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/30' : 'bg-green-500/10 text-green-400 border-green-500/30'}`}><AlertTriangle size={18} className="shrink-0" /> <span className="uppercase tracking-widest">{authMessage.text}</span></div>
-              )}
+              {authMessage.text && <div className={`w-full p-4 rounded-2xl mb-6 text-[11px] font-black border flex items-start gap-3 ${authMessage.type === 'error' ? 'bg-red-500/10 text-red-500 border-red-500/30' : 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'}`}><AlertTriangle size={18} className="shrink-0" /> <span className="uppercase tracking-widest">{authMessage.text}</span></div>}
 
               {authView === 'login' && (
                 <form onSubmit={handleLogin} className="w-full space-y-6">
                   <div className="flex items-center mb-4"><div className="w-1.5 h-6 bg-cyan-400 rounded-full mr-3 shadow-[0_0_8px_#22d3ee]"></div><h2 className="text-lg font-black text-white tracking-widest uppercase">LOGIN PREMIUM</h2></div>
                   <div className="space-y-5">
                     <div><label className="block text-[10px] font-black text-cyan-500 uppercase tracking-[0.2em] mb-2">EMAIL</label><input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-cyan-500 transition-all font-semibold" placeholder="user@mediaanalytics.ai" /></div>
-                    <div><label className="block text-[10px] font-black text-cyan-500 uppercase tracking-[0.2em] mb-2">PASSWORD</label><input type="password" name="password" required value={authForm.password} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-cyan-500 transition-all font-semibold" placeholder="••••••••" /></div>
+                    <div><label className="block text-[10px] font-black text-cyan-500 uppercase tracking-[0.2em] mb-2">PASSWORD</label><input type="password" name="password" required value={authForm.password} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-cyan-500 transition-all" placeholder="••••••••" /></div>
                   </div>
-                  <div className="flex justify-end">
-                    <button type="button" onClick={() => { setAuthView('forgot'); setAuthMessage({type:'', text:''}); }} className="text-cyan-500 text-[11px] font-black hover:text-white transition-colors tracking-widest">Lupa passwordnya?</button>
-                  </div>
-                  <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm transition-all shadow-xl">{authLoading ? 'MEMPROSES...' : 'ACCESS SYSTEM'}</button>
-                  <button type="button" onClick={() => { setAuthView('guest'); setAuthMessage({type:'', text:''}); }} className="w-full bg-[#1c2438] border border-slate-700 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-widest text-[13px] transition-all"><ArrowRightCircle size={20} className="text-green-400" /> COBA GRATIS (TAMU)</button>
-                  <div className="text-center mt-8 text-[11px] font-black tracking-widest text-slate-500 uppercase">BELUM PUNYA AKUN? <button type="button" onClick={() => setAuthView('signup')} className="text-cyan-400 font-bold hover:text-cyan-300 transition-colors ml-1 underline decoration-cyan-500/30 underline-offset-4">REGISTRASI</button></div>
+                  <div className="flex justify-end"><button type="button" onClick={() => setAuthView('forgot')} className="text-cyan-500 text-[11px] font-black hover:underline uppercase tracking-widest">Lupa Password?</button></div>
+                  <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-blue-600 to-cyan-500 hover:from-blue-500 hover:to-cyan-400 text-white font-black py-4 rounded-2xl shadow-[0_4px_15px_rgba(6,182,212,0.3)] uppercase tracking-[0.2em] text-sm transition-all">{authLoading ? 'MEMPROSES...' : 'ACCESS SYSTEM'}</button>
+                  <button type="button" onClick={() => setAuthView('guest')} className="w-full bg-[#1c2438] border border-slate-700 hover:bg-[#252f4a] text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-widest text-[13px] transition-all"><ArrowRightCircle size={20} className="text-green-400" /> COBA GRATIS (TAMU)</button>
+                  <div className="text-center mt-8 text-[11px] font-black tracking-widest text-slate-500 uppercase">BELUM PUNYA AKUN PREMIUM? <button type="button" onClick={() => setAuthView('signup')} className="text-cyan-500 hover:text-white transition-colors ml-1 underline decoration-cyan-500/30 underline-offset-4">REGISTRASI</button></div>
                 </form>
               )}
 
               {authView === 'guest' && (
                 <form onSubmit={handleGuestLogin} className="w-full space-y-6">
-                  <div className="flex flex-col items-start mb-4 leading-none gap-2 w-full text-left">
-                     <div className="flex items-center">
-                        <div className="w-1.5 h-6 bg-green-400 rounded-full mr-3 shadow-[0_0_8px_#4ade80]"></div>
-                        <h2 className="text-lg font-black text-white tracking-widest uppercase">AKSES TAMU</h2>
-                     </div>
-                     <p className="text-[10px] text-slate-400 font-medium leading-relaxed ml-4">Dapatkan 1 Token gratis untuk mencoba kecanggihan PidatoPimpinan.AI</p>
-                  </div>
-                  <div>
-                    <label className="block text-[10px] font-black text-green-500 uppercase tracking-[0.2em] mb-2">ALAMAT EMAIL AKTIF</label>
-                    <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-green-500 transition-all font-semibold" placeholder="email@contoh.com" />
-                  </div>
+                  <div className="flex items-center mb-4"><div className="w-1.5 h-6 bg-green-400 rounded-full mr-3 shadow-[0_0_8px_#4ade80]"></div><h2 className="text-lg font-black text-white tracking-widest uppercase">AKSES TAMU</h2></div>
+                  <div><label className="block text-[10px] font-black text-green-500 uppercase tracking-[0.2em] mb-2">EMAIL ANDA</label><input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-green-500 transition-all" placeholder="email@contoh.com" /></div>
                   <button type="submit" disabled={authLoading} className="w-full bg-[#1c2438] border border-slate-700 text-white font-black py-4 rounded-2xl flex items-center justify-center gap-3 uppercase tracking-widest text-sm shadow-xl">{authLoading ? 'MEMPROSES...' : <><ArrowRightCircle size={20} className="text-green-400" /> MULAI COBA GRATIS</>}</button>
-                  <button type="button" onClick={() => { setAuthView('login'); setAuthMessage({type:'', text:''}); }} className="w-full text-center text-[10px] font-black text-slate-500 uppercase tracking-widest py-2">SUDAH PUNYA AKUN? LOGIN</button>
+                  <button type="button" onClick={() => setAuthView('login')} className="w-full text-center text-[10px] font-black text-slate-500 uppercase tracking-widest py-2">SUDAH PUNYA AKUN? LOGIN</button>
+                </form>
+              )}
+
+              {authView === 'signup' && (
+                <form onSubmit={handleSignup} className="w-full space-y-5">
+                  <div className="flex items-center mb-2"><div className="w-1.5 h-6 bg-purple-500 rounded-full mr-3 shadow-[0_0_8px_#a855f7]"></div><h2 className="text-lg font-black text-white tracking-widest uppercase">REGISTRASI</h2></div>
+                  <div><label className="block text-[10px] font-black text-purple-500 uppercase tracking-[0.2em] mb-2">EMAIL BARU</label><input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-purple-500 transition-all" placeholder="user@mediaanalytics.ai" /></div>
+                  <div><label className="block text-[10px] font-black text-purple-500 uppercase tracking-[0.2em] mb-2">PASSWORD</label><input type="password" name="password" required minLength="6" value={authForm.password} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-purple-500 transition-all" placeholder="6+ KARAKTER" /></div>
+                  <div>
+                     <div className="flex justify-between items-center mb-2"><label className="text-[10px] font-black text-purple-500 uppercase tracking-[0.2em]">KODE AKSES</label><button type="button" onClick={openUpgradeModal} className="text-[9px] bg-purple-900/40 text-purple-300 font-black px-2 py-1 rounded border border-purple-500/30 uppercase tracking-widest">BELI KODE AKSES</button></div>
+                     <input type="text" name="accessCode" required value={authForm.accessCode} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-center text-white outline-none focus:border-purple-500 uppercase font-mono tracking-[0.3em]" placeholder="MASUKAN KODE" />
+                  </div>
+                  <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-purple-500 to-blue-600 text-white font-black py-4 rounded-2xl mt-4 uppercase tracking-widest text-sm shadow-lg">{authLoading ? 'MEMPROSES...' : 'DAFTAR AKUN'}</button>
+                  <button type="button" onClick={() => setAuthView('login')} className="w-full text-center text-[10px] font-black text-slate-500 uppercase tracking-widest py-2">SUDAH PUNYA AKUN? LOGIN</button>
                 </form>
               )}
 
               {authView === 'forgot' && (
                 <form onSubmit={handleResetPassword} className="w-full space-y-6">
-                  <div className="flex flex-col items-start mb-4 text-left">
-                    <div className="flex items-center">
-                      <div className="w-1.5 h-6 bg-slate-400 rounded-full mr-3"></div>
-                      <h2 className="text-lg font-black text-white tracking-widest uppercase">RESET PASSWORD</h2>
-                    </div>
-                    {authMessage.type === 'success' && (
-                      <p className="text-[11px] text-emerald-400 font-bold mt-2 leading-relaxed ml-4">
-                        {authMessage.text}
-                      </p>
-                    )}
-                    {authMessage.type === 'error' && (
-                      <p className="text-[11px] text-red-400 font-bold mt-2 leading-relaxed ml-4 uppercase">
-                        {authMessage.text}
-                      </p>
-                    )}
-                  </div>
-                  <div className="space-y-4">
-                    <p className="text-xs text-slate-400 font-medium leading-relaxed">Masukkan email Anda untuk menerima tautan reset password dari sistem</p>
-                    <div className="relative group">
-                      <Mail className="absolute left-4 top-3.5 text-slate-500 group-focus-within:text-cyan-400 transition-colors" size={20}/>
-                      <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full pl-12 pr-4 py-3.5 bg-slate-800/50 border border-slate-700 rounded-xl text-slate-200 placeholder-slate-500 focus:ring-2 focus:ring-cyan-500/50 outline-none transition-all font-semibold" placeholder="email@anda.com" />
-                    </div>
-                  </div>
-                  <button type="submit" disabled={authLoading} className="w-full bg-slate-700 hover:bg-slate-600 transition-colors text-white font-black py-4 rounded-2xl tracking-widest uppercase text-sm">{authLoading ? 'MENGIRIM...' : 'KIRIM TAUTAN RESET'}</button>
-                  <button type="button" onClick={() => { setAuthView('login'); setAuthMessage({type:'', text:''}); }} className="w-full text-center text-[10px] font-black text-slate-500 hover:text-white uppercase tracking-widest py-2 transition-colors">SUDAH INGAT PASSWORDNYA? LOGIN</button>
-                </form>
-              )}
-
-              {authView === 'signup' && (
-                <form onSubmit={handleSignup} className="w-full space-y-5 text-left">
-                  <div className="flex items-center mb-2"><div className="w-1.5 h-6 bg-purple-500 rounded-full mr-3 shadow-[0_0_8px_#a855f7]"></div><h2 className="text-lg font-black text-white tracking-widest uppercase">REGISTRASI</h2></div>
-                  
-                  <div>
-                    <label className="block text-[10px] font-black text-purple-500 uppercase tracking-[0.2em] mb-2">EMAIL</label>
-                    <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-purple-500 transition-all font-semibold text-[11px]" placeholder="Masukkan email aktif" />
-                  </div>
-                  
-                  <div>
-                    <label className="block text-[10px] font-black text-purple-500 uppercase tracking-[0.2em] mb-2">PASSWORD</label>
-                    <input type="password" name="password" required minLength="6" value={authForm.password} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-purple-500 transition-all font-semibold text-[11px]" placeholder="Masukkan 6 karakter bebas (huruf/angka)" />
-                  </div>
-                  
-                  <div>
-                     <div className="flex justify-between items-center mb-2"><label className="text-[10px] font-black text-purple-500 uppercase tracking-[0.2em]">KODE AKSES</label><button type="button" onClick={openUpgradeModal} className="text-[9px] bg-purple-900/40 text-purple-300 font-black px-2 py-1 rounded border border-purple-500/30 uppercase tracking-widest">BELI KODE AKSES</button></div>
-                     <input type="text" name="accessCode" required value={authForm.accessCode} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-center text-white outline-none focus:border-purple-500 uppercase font-mono tracking-[0.3em] text-[11px]" placeholder="Masukkan kode akses" />
-                  </div>
-                  
-                  <button type="submit" disabled={authLoading} className="w-full bg-gradient-to-r from-purple-500 to-blue-600 text-white font-black py-4 rounded-2xl mt-4 uppercase tracking-widest text-sm shadow-lg">{authLoading ? 'MEMPROSES...' : 'DAFTAR AKUN'}</button>
-                  <button type="button" onClick={() => { setAuthView('login'); setAuthMessage({type:'', text:''}); }} className="w-full text-center text-[10px] font-black text-slate-500 uppercase tracking-widest py-2">SUDAH PUNYA AKUN? LOGIN</button>
+                  <div className="flex items-center mb-4"><div className="w-1.5 h-6 bg-slate-400 rounded-full mr-3"></div><h2 className="text-lg font-black text-white tracking-widest uppercase">RESET SANDI</h2></div>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase text-center">Tautan reset akan dikirim ke email terdaftar Anda.</p>
+                  <input type="email" name="email" required value={authForm.email} onChange={handleAuthInputChange} className="w-full bg-[#0d121f] border border-slate-700/50 rounded-2xl px-5 py-4 text-white outline-none focus:border-cyan-500" placeholder="email@anda.com" />
+                  <button type="submit" disabled={authLoading} className="w-full bg-slate-700 text-white font-black py-4 rounded-2xl uppercase tracking-widest text-sm">{authLoading ? 'MENGIRIM...' : 'KIRIM TAUTAN'}</button>
+                  <button type="button" onClick={() => setAuthView('login')} className="w-full text-center text-[10px] font-black text-slate-500 uppercase tracking-widest py-2">SUDAH PUNYA AKUN? LOGIN</button>
                 </form>
               )}
             </div>
@@ -721,164 +601,123 @@
         );
       }
 
-      // --- MAIN DASHBOARD VIEW ---
+      // =========================================================================
+      // DASHBOARD UI 
+      // =========================================================================
       return (
         <div className="min-h-screen bg-slate-950 font-sans text-slate-200 pb-12 relative selection:bg-cyan-500/30 selection:text-white">
           {renderUpgradeModal()}
-          {renderDeleteModal()}
           <div className="fixed top-[-10%] left-[-10%] w-[500px] h-[500px] bg-blue-900/10 rounded-full blur-[120px] pointer-events-none z-0"></div>
           <div className="fixed bottom-[-10%] right-[-10%] w-[500px] h-[500px] bg-cyan-900/10 rounded-full blur-[100px] pointer-events-none z-0"></div>
 
           <header className="bg-slate-900/80 backdrop-blur-md border-b border-slate-800 sticky top-0 z-50 shadow-lg shadow-black/20">
             <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <div className="bg-slate-800 p-2.5 rounded-xl border border-slate-700 ring-1 ring-cyan-500/30 shadow-xl"><Cpu size={24} className="text-cyan-400" /></div>
+                <div className="bg-slate-800 p-2.5 rounded-xl border border-slate-700 ring-1 ring-cyan-500/30"><Cpu size={24} className="text-cyan-400" /></div>
                 <div>
-                  <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-sm">MediaAnalytics<span className="text-cyan-400">.AI</span></h1>
-                  <p className="text-[10px] text-cyan-300/70 font-bold tracking-widest mt-0.5">Aplikasi Pembuat Analisis Isu Otomatis</p>
+                  <h1 className="text-xl font-bold tracking-tight text-white drop-shadow-sm uppercase">MediaAnalytics<span className="text-cyan-400">.AI</span></h1>
+                  <p className="text-[10px] text-cyan-300/70 font-bold tracking-widest uppercase mt-0.5">Aplikasi Pembuat Analisis Isu Otomatis</p>
                 </div>
               </div>
               <div className="flex items-center gap-5">
                  <div className="text-right hidden sm:block">
                     <p className="text-sm font-semibold text-slate-300 truncate max-w-[150px]">{user.email}</p>
-                    {!userData ? (
-                      <p className="text-[10px] text-slate-400 uppercase tracking-[0.2em] font-bold flex items-center justify-end gap-1 mt-0.5">MEMUAT PROFIL...</p>
-                    ) : (userData.role === 'premium' || userData.tokens === 'unlimited') ? (
-                      <p className="text-[10px] text-amber-400 uppercase tracking-[0.2em] font-bold flex items-center justify-end gap-1 mt-0.5"><Star size={10} fill="currentColor"/> AKUN PREMIUM</p>
-                    ) : (
-                      <p className="text-[10px] text-emerald-400 uppercase tracking-[0.2em] font-bold flex items-center justify-end gap-1 mt-0.5">SISA TOKEN: {userData.tokens !== undefined ? userData.tokens : 0}</p>
-                    )}
+                    {userData?.role === 'premium' ? <p className="text-[10px] text-amber-400 uppercase tracking-[0.2em] font-bold flex items-center justify-end gap-1 mt-0.5"><Star size={10} fill="currentColor"/> PREMIUM</p> : <p className="text-[10px] text-emerald-400 uppercase tracking-[0.2em] font-bold flex items-center justify-end gap-1 mt-0.5">SISA TOKEN: {userData?.tokens || 0}</p>}
                  </div>
-                 
-                 {(userData?.role === 'premium' || userData?.tokens === 'unlimited') && (
-                   <button onClick={() => setViewMode(viewMode === 'dashboard' ? 'history' : 'dashboard')} className="bg-blue-900/40 hover:bg-blue-800/60 text-blue-300 border border-blue-700/50 text-[10px] font-black px-4 py-2.5 rounded-xl transition-all shadow-lg flex items-center gap-2 uppercase tracking-widest">
-                     {viewMode === 'dashboard' ? <><History size={14}/> RIWAYAT ANALISIS</> : <><ArrowLeft size={14}/> KEMBALI KE FORM</>}
-                   </button>
-                 )}
-
                  {userData?.role === 'guest' && <button onClick={openUpgradeModal} className="bg-amber-500 hover:bg-amber-400 text-white text-xs font-bold px-3 py-2 rounded-lg shadow-lg">UPGRADE</button>}
                  <button onClick={handleLogout} className="bg-slate-800 hover:bg-red-900/80 text-slate-300 hover:text-red-300 p-2.5 rounded-xl transition-all border border-slate-700 group ml-2" title="Keluar"><LogOut size={16} /></button>
               </div>
             </div>
           </header>
 
-          <main className="max-w-6xl mx-auto px-4 py-8 relative z-10">
-            {viewMode === 'history' ? (
-              <div className="bg-[#111827] border border-slate-800 p-8 rounded-[32px] shadow-2xl min-h-[500px]">
-                <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 mb-8 border-b border-slate-800 pb-4">
-                  <h2 className="text-2xl font-black text-white uppercase tracking-widest flex items-center gap-3">
-                    <FolderOpen className="text-blue-500"/> Riwayat Analisis
-                  </h2>
-                  <div className="bg-slate-800/50 px-4 py-2 rounded-xl border border-slate-700">
-                     <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Kuota Penyimpanan</p>
-                     <p className="text-sm font-black text-cyan-400">{10 - savedAnalyses.length} TERSEDIA DARI 10</p>
+          <main className="max-w-6xl mx-auto px-4 py-8 grid grid-cols-1 lg:grid-cols-12 gap-8 z-10 relative">
+            <div className="lg:col-span-5 space-y-6">
+              <div className="bg-[#111827] border border-slate-800 p-6 rounded-[32px] relative overflow-hidden shadow-xl">
+                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 to-cyan-400"></div>
+                <h2 className="text-lg font-bold mb-6 flex items-center gap-3 text-white uppercase tracking-wider text-sm"><div className="bg-slate-800 p-1.5 rounded-md"><FileText size={18} className="text-cyan-400"/></div> Form Analisis</h2>
+                <div className="space-y-5">
+                  <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none"/>
+                  <input type="text" name="title" placeholder="Judul Isu / Headline..." value={formData.title} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none font-semibold"/>
+                  <input type="url" name="sourceUrl" placeholder="Link Berita (Opsional)" value={formData.sourceUrl} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm"/>
+                  <textarea name="content" rows="10" placeholder="Salin isi berita ke sini..." value={formData.content} onChange={handleInputChange} className="w-full p-4 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm resize-y leading-relaxed font-medium"></textarea>
+                  <div className="flex gap-3">
+                    {userData?.role === 'guest' && userData?.tokens <= 0 ? (
+                      <button onClick={openUpgradeModal} className="flex-1 bg-amber-500 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-sm shadow-lg"><Star size={18}/> TOKEN HABIS - UPGRADE</button>
+                    ) : (
+                      <button onClick={generateAnalysis} disabled={isAnalyzing} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-black py-4 rounded-xl shadow-lg flex items-center justify-center gap-3 uppercase tracking-widest text-sm transition-all">
+                        {isAnalyzing ? 'MENGANALISIS...' : <><Cpu size={18}/> Analytics</>}
+                      </button>
+                    )}
+                    <button onClick={handleReset} className="px-6 bg-[#1c2438] text-slate-300 font-bold rounded-xl border border-slate-700 uppercase text-xs">RESET</button>
                   </div>
-                </div>
-
-                {historyLoading ? (
-                  <div className="flex flex-col items-center justify-center py-20"><div className="animate-spin rounded-full h-10 w-10 border-b-2 border-cyan-500"></div></div>
-                ) : savedAnalyses.length === 0 ? (
-                  <div className="flex flex-col items-center justify-center py-20 text-slate-500 border border-dashed border-slate-700 rounded-2xl bg-slate-900/30">
-                    <FolderOpen size={48} className="mb-4 opacity-50"/><p className="text-sm font-bold tracking-widest uppercase">Belum ada riwayat analisis.</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {savedAnalyses.map((item) => (
-                      <div key={item.id} className="bg-[#0d121f] border border-slate-700/50 rounded-2xl p-5 hover:border-cyan-500/50 transition-all shadow-lg flex flex-col h-full group">
-                        <div className="flex justify-between items-start mb-3">
-                          <span className="text-[10px] font-bold text-cyan-400 bg-cyan-900/30 px-2 py-1 rounded uppercase tracking-widest flex items-center gap-1.5"><Calendar size={10}/> {item.date}</span>
-                          <button onClick={() => confirmDelete(item.id)} className="text-slate-500 hover:text-red-500 transition-colors p-1"><Trash2 size={16} /></button>
-                        </div>
-                        <h3 className="text-sm font-bold text-white mb-4 line-clamp-2 uppercase leading-snug">{item.title}</h3>
-                        <div className="mt-auto pt-4 border-t border-slate-800">
-                          <button onClick={() => handleOpenAnalysis(item)} className="w-full bg-slate-800 hover:bg-slate-700 text-white text-[10px] font-black py-2.5 rounded-xl uppercase tracking-widest transition-colors flex items-center justify-center gap-2"><FileText size={14}/> Buka Analisis</button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
-                <div className="lg:col-span-5 space-y-6">
-                  <div className="bg-[#111827] border border-slate-800 p-6 rounded-[32px] relative overflow-hidden shadow-xl">
-                    <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-blue-600 to-cyan-400"></div>
-                    <h2 className="text-lg font-bold mb-6 flex items-center gap-3 text-white uppercase tracking-wider text-sm"><div className="bg-slate-800 p-1.5 rounded-md"><FileText size={18} className="text-cyan-400"/></div> Form Analisis</h2>
-                    <div className="space-y-5">
-                      <input type="date" name="date" value={formData.date} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm font-semibold"/>
-                      <input type="text" name="title" placeholder="Judul Isu" value={formData.title} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm font-semibold"/>
-                      <input type="url" name="sourceUrl" placeholder="Sumber/Link Artikel (Opsional)" value={formData.sourceUrl} onChange={handleInputChange} className="w-full p-3 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm font-semibold"/>
-                      <textarea name="content" rows="10" placeholder="Salin isi berita ke sini..." value={formData.content} onChange={handleInputChange} className="w-full p-4 bg-[#0d121f] border border-slate-700 rounded-xl text-white outline-none text-sm resize-y leading-relaxed font-semibold"></textarea>
-                      <div className="flex gap-3">
-                        {userData?.role === 'guest' && userData?.tokens <= 0 ? (
-                          <button onClick={openUpgradeModal} className="flex-1 bg-amber-500 text-white font-bold py-4 rounded-xl uppercase tracking-widest text-sm shadow-lg"><Star size={18}/> TOKEN HABIS - UPGRADE</button>
-                        ) : (
-                          <button onClick={generateAnalysis} disabled={isAnalyzing} className="flex-1 bg-blue-700 hover:bg-blue-600 text-white font-black py-4 rounded-xl shadow-lg flex items-center justify-center gap-3 uppercase tracking-widest text-sm transition-all">{isAnalyzing ? 'MENGANALISIS...' : <><Cpu size={18}/> Analytics</>}</button>
-                        )}
-                        <button onClick={handleReset} className="px-6 bg-[#1c2438] text-slate-300 font-bold rounded-xl border border-slate-700 uppercase text-xs">RESET</button>
-                      </div>
-                      {errorMsg && <div className="p-3 bg-red-900/30 text-red-400 border border-red-800/50 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-start gap-2 animate-pulse"><AlertTriangle size={14} className="shrink-0" /> {errorMsg}</div>}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="lg:col-span-7">
-                  {result && !isAnalyzing ? (
-                    <div className="bg-[#111827] rounded-[32px] border border-slate-800 overflow-hidden flex flex-col h-full shadow-2xl">
-                      <div className="bg-slate-800/50 border-b border-slate-700 p-4 flex flex-wrap justify-between items-center gap-3">
-                        <h3 className="font-black text-white uppercase text-xs tracking-[0.2em] ml-2">Terminal Output AI</h3>
-                        <div className="flex flex-wrap gap-2 items-center">
-                          {(userData?.role === 'premium' || userData?.tokens === 'unlimited') && (
-                            <button onClick={handleSaveAnalysis} disabled={isSaving} className="px-4 py-2 text-[10px] font-black bg-blue-600/20 border border-blue-500/50 text-blue-300 rounded-xl hover:bg-blue-600/40 uppercase tracking-widest transition-all flex items-center gap-1.5 disabled:opacity-50"><Save size={14}/> {isSaving ? 'MENYIMPAN...' : 'SIMPAN'}</button>
-                          )}
-                          <button onClick={() => copyToClipboard(getFormattedText(), 'all')} className="px-4 py-2 text-[10px] bg-slate-700 border border-slate-600 rounded-xl hover:bg-slate-600 text-white font-black uppercase tracking-widest">COPY</button>
-                          <div className="relative">
-                            <button onClick={() => setShowDownloadMenu(!showDownloadMenu)} className="px-4 py-2 text-[10px] font-black bg-cyan-600/20 border border-cyan-500/50 text-cyan-300 rounded-xl hover:bg-cyan-600/40 uppercase tracking-widest transition-all flex items-center gap-1.5"><Download size={14}/> DOWNLOAD <ChevronDown size={12}/></button>
-                            {showDownloadMenu && (
-                              <>
-                                <div className="fixed inset-0 z-40" onClick={() => setShowDownloadMenu(false)}></div>
-                                <div className="absolute right-0 mt-2 w-48 bg-[#1a2133] border border-slate-700 rounded-xl shadow-[0_10px_30px_rgba(0,0,0,0.5)] overflow-hidden z-50 animate-in fade-in slide-in-from-top-2">
-                                  <button onClick={() => { downloadWord(); setShowDownloadMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] text-slate-300 hover:bg-slate-800 hover:text-cyan-400 font-black tracking-widest flex items-center gap-2 border-b border-slate-700/50 transition-colors uppercase"><FileOutput size={14} /> FORMAT WORD (.DOC)</button>
-                                  <button onClick={() => { downloadPDF(); setShowDownloadMenu(false); }} className="w-full text-left px-4 py-3 text-[10px] text-slate-300 hover:bg-slate-800 hover:text-red-400 font-black tracking-widest flex items-center gap-2 transition-colors uppercase"><FileText size={14} /> FORMAT PDF (.PDF)</button>
-                                </div>
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                      {saveSuccessMsg && <div className="bg-green-500/20 text-green-400 text-xs font-bold text-center py-2 uppercase tracking-widest border-b border-green-500/30">{saveSuccessMsg}</div>}
-                      <div className="p-8 space-y-10 overflow-y-auto h-[600px] custom-scrollbar bg-[#0d121f]/50 text-left">
-                        <div className="border-b border-slate-800 pb-6"><h2 className="text-2xl font-black text-white leading-tight mb-2">{formData.title}</h2><p className="text-[10px] text-slate-500 font-black tracking-widest uppercase">{formData.date}</p></div>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-blue-500 uppercase tracking-[0.2em]">01 // Resume Berita</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 text-slate-300 text-sm leading-relaxed text-justify">{result.resume}</div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">02 // Analisis Deskriptif</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50 text-slate-300 text-sm leading-relaxed text-justify">{result.analisis_deskriptif}</div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-amber-500 uppercase tracking-[0.2em]">03 // Analisis SWOT</h4><div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="bg-emerald-950/20 p-5 rounded-2xl border border-emerald-900/30"><h5 className="text-emerald-400 font-black mb-3 uppercase text-[9px] tracking-widest text-left">Strengths</h5><ul className="text-slate-300 text-[11px] font-bold space-y-2 text-left">{result.swot_kekuatan.map((i,x)=><li key={x}>● {i}</li>)}</ul></div>
-                          <div className="bg-orange-950/20 p-5 rounded-2xl border border-orange-900/30"><h5 className="text-orange-400 font-black mb-3 uppercase text-[9px] tracking-widest text-left">Weaknesses</h5><ul className="text-slate-300 text-[11px] font-bold space-y-2 text-left">{result.swot_kelemahan.map((i,x)=><li key={x}>● {i}</li>)}</ul></div>
-                          <div className="bg-blue-950/20 p-5 rounded-2xl border border-blue-900/30"><h5 className="text-blue-400 font-black mb-3 uppercase text-[9px] tracking-widest text-left">Opportunities</h5><ul className="text-slate-300 text-[11px] font-bold space-y-2 text-left">{result.swot_peluang.map((i,x)=><li key={x}>● {i}</li>)}</ul></div>
-                          <div className="bg-red-950/20 p-5 rounded-2xl border border-red-900/30"><h5 className="text-red-400 font-black mb-3 uppercase text-[9px] tracking-widest text-left">Threats</h5><ul className="text-slate-300 text-[11px] font-bold space-y-2 text-left">{result.swot_ancaman.map((i,x)=><li key={x}>● {i}</li>)}</ul></div>
-                        </div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-green-500 uppercase tracking-[0.2em]">04 // Rekomendasi Kebijakan</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.kebijakan.map((i,x)=><li key={x} className="flex gap-3"><span className="text-green-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-purple-500 uppercase tracking-[0.2em]">05 // Strategi Komunikasi</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.strategi_komunikasi.map((i,x)=><li key={x} className="flex gap-3"><span className="text-purple-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-cyan-500 uppercase tracking-[0.2em]">06 // Rekomendasi Publikasi</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.rekomendasi_publikasi.map((i,x)=><li key={x} className="flex gap-3"><span className="text-cyan-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
-                        <section className="space-y-3 text-left"><h4 className="text-xs font-black text-rose-500 uppercase tracking-[0.2em]">07 // Kesimpulan</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><p className="text-slate-300 text-sm leading-relaxed text-justify">{result.kesimpulan}</p></div></section>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="h-full flex flex-col items-center justify-center p-12 border border-dashed border-slate-700 rounded-[50px] bg-[#111827]/50 min-h-[500px]">
-                      <Globe size={64} className={isAnalyzing ? 'text-cyan-300 animate-pulse' : 'text-slate-800'} />
-                      <p className="text-cyan-400 text-sm font-black tracking-[0.3em] uppercase mt-8">{isAnalyzing ? 'PROSES ANALISIS...' : 'SISTEM MENUNGGU DATA'}</p>
-                      <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-4 text-center max-w-xs leading-relaxed">Masukkan teks media di panel kiri untuk memulai proses analisis kebijakan otomatis berbasis AI sesuai EYD.</p>
-                    </div>
-                  )}
+                  {errorMsg && <div className="p-3 bg-red-900/30 text-red-400 border border-red-800/50 rounded-xl text-[10px] font-black uppercase tracking-widest flex items-start gap-2 animate-pulse"><AlertTriangle size={14} className="shrink-0" /> {errorMsg}</div>}
                 </div>
               </div>
-            )}
+            </div>
+
+            <div className="lg:col-span-7">
+              {result && !isAnalyzing ? (
+                <div className="bg-[#111827] rounded-[32px] border border-slate-800 overflow-hidden flex flex-col h-full shadow-2xl">
+                  <div className="bg-slate-800/50 border-b border-slate-700 p-4 flex justify-between items-center">
+                    <h3 className="font-black text-white uppercase text-xs tracking-[0.2em] ml-2">Terminal Output AI</h3>
+                    <div className="flex gap-2">
+                      <button onClick={() => copyToClipboard(getFormattedText(), 'all')} className="px-4 py-2 text-[10px] bg-slate-700 border border-slate-600 rounded-xl hover:bg-slate-600 text-white font-black uppercase tracking-widest">COPY</button>
+                      <button onClick={downloadWord} className="px-4 py-2 text-[10px] font-black bg-cyan-600/20 border border-cyan-500/50 text-cyan-300 rounded-xl hover:bg-cyan-600/40 uppercase tracking-widest transition-all">EXPORT</button>
+                    </div>
+                  </div>
+                  <div className="p-8 space-y-10 overflow-y-auto h-[600px] custom-scrollbar bg-[#0d121f]/50">
+                    <div className="border-b border-slate-800 pb-6"><h2 className="text-2xl font-black text-white leading-tight mb-2">{formData.title}</h2><p className="text-[10px] text-slate-500 font-black tracking-widest uppercase">{formData.date}</p></div>
+                    
+                    <section className="space-y-3"><h4 className="text-xs font-black text-blue-500 uppercase tracking-[0.2em]">01 // Resume Berita</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><p className="text-slate-300 text-sm leading-relaxed text-justify">{result.resume}</p></div></section>
+                    
+                    <section className="space-y-3"><h4 className="text-xs font-black text-indigo-500 uppercase tracking-[0.2em]">02 // Analisis Deskriptif</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><p className="text-slate-300 text-sm leading-relaxed text-justify">{result.analisis_deskriptif}</p></div></section>
+                    
+                    <section className="space-y-3"><h4 className="text-xs font-black text-amber-500 uppercase tracking-[0.2em]">03 // Analisis SWOT</h4>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <div className="bg-emerald-950/20 p-5 rounded-2xl border border-emerald-900/30">
+                          <h5 className="text-emerald-400 font-black mb-3 uppercase text-[9px] tracking-widest">Strengths (Kekuatan)</h5>
+                          <ul className="text-slate-300 text-[11px] font-bold space-y-2 leading-relaxed">{result.swot_kekuatan.map((i,x)=><li key={x} className="flex gap-2 items-start"><span className="text-emerald-500 shrink-0 mt-1">●</span> {i}</li>)}</ul>
+                        </div>
+                        <div className="bg-orange-950/20 p-5 rounded-2xl border border-orange-900/30">
+                          <h5 className="text-orange-400 font-black mb-3 uppercase text-[9px] tracking-widest">Weaknesses (Kelemahan)</h5>
+                          <ul className="text-slate-300 text-[11px] font-bold space-y-2 leading-relaxed">{result.swot_kelemahan.map((i,x)=><li key={x} className="flex gap-2 items-start"><span className="text-orange-500 shrink-0 mt-1">●</span> {i}</li>)}</ul>
+                        </div>
+                        <div className="bg-blue-950/20 p-5 rounded-2xl border border-blue-900/30">
+                          <h5 className="text-blue-400 font-black mb-3 uppercase text-[9px] tracking-widest">Opportunities (Peluang)</h5>
+                          <ul className="text-slate-300 text-[11px] font-bold space-y-2 leading-relaxed">{result.swot_peluang.map((i,x)=><li key={x} className="flex gap-2 items-start"><span className="text-blue-500 shrink-0 mt-1">●</span> {i}</li>)}</ul>
+                        </div>
+                        <div className="bg-red-950/20 p-5 rounded-2xl border border-red-900/30">
+                          <h5 className="text-red-400 font-black mb-3 uppercase text-[9px] tracking-widest">Threats (Ancaman)</h5>
+                          <ul className="text-slate-300 text-[11px] font-bold space-y-2 leading-relaxed">{result.swot_ancaman.map((i,x)=><li key={x} className="flex gap-2 items-start"><span className="text-red-500 shrink-0 mt-1">●</span> {i}</li>)}</ul>
+                        </div>
+                      </div>
+                    </section>
+                    
+                    <section className="space-y-3"><h4 className="text-xs font-black text-green-500 uppercase tracking-[0.2em]">04 // Rekomendasi Kebijakan</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.kebijakan.map((i,x)=><li key={x} className="flex gap-3"><span className="text-green-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
+                    
+                    <section className="space-y-3"><h4 className="text-xs font-black text-purple-500 uppercase tracking-[0.2em]">05 // Strategi Komunikasi</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.strategi_komunikasi.map((i,x)=><li key={x} className="flex gap-3"><span className="text-purple-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
+
+                    <section className="space-y-3"><h4 className="text-xs font-black text-cyan-500 uppercase tracking-[0.2em]">06 // Rekomendasi Publikasi</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><ul className="text-slate-300 text-[11px] font-bold space-y-3 leading-relaxed">{result.rekomendasi_publikasi.map((i,x)=><li key={x} className="flex gap-3"><span className="text-cyan-500 shrink-0 font-mono">[{x+1}]</span> {i}</li>)}</ul></div></section>
+
+                    <section className="space-y-3"><h4 className="text-xs font-black text-rose-500 uppercase tracking-[0.2em]">07 // Kesimpulan</h4><div className="bg-slate-800/40 p-6 rounded-2xl border border-slate-700/50"><p className="text-slate-300 text-sm leading-relaxed text-justify">{result.kesimpulan}</p></div></section>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center p-12 border border-dashed border-slate-700 rounded-[50px] bg-[#111827]/50 min-h-[500px]">
+                  <Cpu size={64} className={isAnalyzing ? 'text-cyan-300 animate-pulse' : 'text-slate-800'} />
+                  <p className="text-cyan-400 text-sm font-black tracking-[0.3em] uppercase mt-8">{isAnalyzing ? 'PROSES ANALISIS...' : 'SISTEM MENUNGGU DATA'}</p>
+                  <p className="text-slate-600 text-[10px] font-bold uppercase tracking-widest mt-4 text-center max-w-xs leading-relaxed">Masukkan teks media di panel kiri untuk memulai proses analisis kebijakan otomatis berbasis AI sesuai EYD.</p>
+                </div>
+              )}
+            </div>
           </main>
+
           <style dangerouslySetInnerHTML={{__html: `.custom-scrollbar::-webkit-scrollbar { width: 5px; } .custom-scrollbar::-webkit-scrollbar-track { background: transparent; } .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #1e293b; border-radius: 10px; }`}} />
         </div>
       );
     };
 
+    // Melakukan render komponen App ke dalam div id="root"
     const root = createRoot(document.getElementById('root'));
     root.render(<App />);
   </script>
